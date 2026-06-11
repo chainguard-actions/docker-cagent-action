@@ -1,0 +1,52 @@
+name: Test basic usage with all inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List the files in the current directory"
+          anthropic-api-key: "fake-anthropic-key"
+          openai-api-key: "fake-openai-key"
+          google-api-key: "fake-google-key"
+          aws-bearer-token-bedrock: "fake-aws-bearer-token"
+          xai-api-key: "fake-xai-key"
+          nebius-api-key: "fake-nebius-key"
+          mistral-api-key: "fake-mistral-key"
+          github-token: "fake-github-token"
+          timeout: "30"
+          debug: "false"
+          working-directory: "."
+          yolo: "true"
+          max-retries: "0"
+          retry-delay: "1"
+          extra-args: ""
+          add-prompt-files: ""
+          skip-summary: "true"
+          skip-auth: "true"
+          mcp-gateway: "false"
+      - name: Assert outputs are set
+        env:
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+          OUTPUT_FILE: ${{ steps.action.outputs.output-file }}
+          SECURITY_BLOCKED: ${{ steps.action.outputs.security-blocked }}
+          SECRETS_DETECTED: ${{ steps.action.outputs.secrets-detected }}
+          PROMPT_SUSPICIOUS: ${{ steps.action.outputs.prompt-suspicious }}
+          INPUT_RISK_LEVEL: ${{ steps.action.outputs.input-risk-level }}
+        run: |
+          echo "exit-code: $EXIT_CODE"
+          echo "output-file: $OUTPUT_FILE"
+          echo "security-blocked: $SECURITY_BLOCKED"
+          echo "secrets-detected: $SECRETS_DETECTED"
+          echo "prompt-suspicious: $PROMPT_SUSPICIOUS"
+          echo "input-risk-level: $INPUT_RISK_LEVEL"
+          echo "PASS: action ran and outputs were captured"

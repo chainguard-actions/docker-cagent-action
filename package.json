@@ -1,0 +1,44 @@
+{
+  "name": "docker-agent-action",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest --project unit",
+    "actionlint": "pnpm build && actionlint -shellcheck=",
+    "lint": "biome ci . && tsc --noEmit && pnpm actionlint",
+    "format": "biome check --write ."
+  },
+  "dependencies": {
+    "@actions/artifact": "^6.2.1",
+    "@actions/cache": "^6.0.0",
+    "@actions/core": "3.0.0",
+    "@actions/exec": "^3.0.0",
+    "@actions/tool-cache": "^4.0.0",
+    "@aws-sdk/client-secrets-manager": "3.972.0",
+    "@aws-sdk/credential-provider-web-identity": "3.972.0",
+    "@octokit/auth-app": "8.2.0",
+    "@octokit/rest": "22.0.1"
+  },
+  "devDependencies": {
+    "@aws-sdk/types": "3.973.7",
+    "@biomejs/biome": "2.4.11",
+    "@types/node": "22.0.0",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  },
+  "packageManager": "pnpm@10.26.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "fast-xml-parser": "^5.3.5"
+    }
+  }
+}
