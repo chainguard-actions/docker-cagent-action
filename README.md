@@ -9,6 +9,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 | Version | Tag | Upstream commit |
 |---------|-----|-----------------|
 | v1.5.4 | [`v1.5.4`](https://github.com/chainguard-actions/docker-cagent-action/tree/v1.5.4) | [`3f5dc99`](https://github.com/docker/cagent-action/commit/3f5dc9969f307d3c76acb7e9ccaefdd96bd62f4b) |
+| v1.5.5 | [`v1.5.5`](https://github.com/chainguard-actions/docker-cagent-action/tree/v1.5.5) | [`367a30d`](https://github.com/docker/cagent-action/commit/367a30ddb41e0156459d03750f508eac03f3c38a) |
 
 ## Privacy
 
