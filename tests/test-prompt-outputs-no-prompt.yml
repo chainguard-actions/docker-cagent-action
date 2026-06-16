@@ -1,0 +1,41 @@
+name: Test prompt sanitization outputs with no prompt
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: push
+      GITHUB_REF: refs/heads/main
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Run action with no prompt (expect failure at binary setup)
+        id: action
+        uses: .
+        with:
+          agent: docker/code-analyzer
+          skip-auth: "true"
+          openai-api-key: "sk-fake-key-for-testing"
+          timeout: "10"
+          max-retries: "0"
+        continue-on-error: true
+      - name: Assert prompt-suspicious output is false when no prompt given
+        env:
+          PROMPT_SUSPICIOUS: ${{ steps.action.outputs.prompt-suspicious }}
+        run: |
+          echo "prompt-suspicious: $PROMPT_SUSPICIOUS"
+          if [ "$PROMPT_SUSPICIOUS" != "false" ]; then
+            echo "FAIL: expected prompt-suspicious='false' when no prompt provided, got '$PROMPT_SUSPICIOUS'"
+            exit 1
+          fi
+          echo "PASS: prompt-suspicious is correctly 'false'"
+      - name: Assert input-risk-level output is low when no prompt given
+        env:
+          RISK_LEVEL: ${{ steps.action.outputs.input-risk-level }}
+        run: |
+          echo "input-risk-level: $RISK_LEVEL"
+          if [ "$RISK_LEVEL" != "low" ]; then
+            echo "FAIL: expected input-risk-level='low' when no prompt provided, got '$RISK_LEVEL'"
+            exit 1
+          fi
+          echo "PASS: input-risk-level is correctly 'low'"

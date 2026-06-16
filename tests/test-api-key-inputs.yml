@@ -1,0 +1,45 @@
+name: Test API key inputs coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: push
+      GITHUB_REF: refs/heads/main
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Run action with all API key inputs (expect failure at binary setup)
+        id: action
+        uses: .
+        with:
+          agent: docker/code-analyzer
+          skip-auth: "true"
+          anthropic-api-key: "sk-ant-fake-key-for-testing"
+          aws-bearer-token-bedrock: "fake-aws-bearer-token-for-testing"
+          github-token: "ghp_fake_token_for_testing"
+          google-api-key: "fake-google-api-key-for-testing"
+          mistral-api-key: "fake-mistral-api-key-for-testing"
+          nebius-api-key: "fake-nebius-api-key-for-testing"
+          xai-api-key: "fake-xai-api-key-for-testing"
+          timeout: "10"
+          max-retries: "0"
+        continue-on-error: true
+      - name: Assert action ran (failed at binary setup, not at input validation)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          SECURITY_BLOCKED: ${{ steps.action.outputs.security-blocked }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "security-blocked: $SECURITY_BLOCKED"
+          # The action should fail because docker agent binary is not available in test env
+          # but it should have accepted all the API key inputs without validation errors
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "FAIL: expected action to fail (no docker agent binary), got outcome=$OUTCOME"
+            exit 1
+          fi
+          if [ "$SECURITY_BLOCKED" = "true" ]; then
+            echo "FAIL: action was security-blocked unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action accepted all API key inputs and failed at binary setup as expected"

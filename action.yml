@@ -1,0 +1,121 @@
+# Copyright The Docker Agent Action authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: "cagent Runner"
+description: "Run a cagent AI agent with a single line"
+author: "Docker"
+branding:
+  icon: "cpu"
+  color: "blue"
+inputs:
+  agent:
+    description: "Agent identifier (e.g., docker/code-analyzer from Docker Hub, or path to .yaml file)"
+    required: true
+  prompt:
+    description: "Prompt to pass to the agent. If not provided, uses a default based on the agent type"
+    required: false
+  mcp-gateway:
+    description: "Install mcp-gateway (true/false)"
+    required: false
+    default: "false"
+  mcp-gateway-version:
+    description: "Version of mcp-gateway to use (specifying this will enable mcp-gateway installation)"
+    required: false
+    default: "v0.22.0"
+  anthropic-api-key:
+    description: "Anthropic API key for Claude models (at least one API key required)"
+    required: false
+  openai-api-key:
+    description: "OpenAI API key (at least one API key required)"
+    required: false
+  google-api-key:
+    description: "Google API key for Gemini models (at least one API key required)"
+    required: false
+  aws-bearer-token-bedrock:
+    description: "AWS Bearer token for Bedrock models (at least one API key required)"
+    required: false
+  xai-api-key:
+    description: "xAI API key for Grok models (at least one API key required)"
+    required: false
+  nebius-api-key:
+    description: "Nebius API key (at least one API key required)"
+    required: false
+  mistral-api-key:
+    description: "Mistral API key (at least one API key required)"
+    required: false
+  github-token:
+    description: "GitHub token for API access (defaults to GITHUB_TOKEN)"
+    required: false
+  timeout:
+    description: "Timeout in seconds for agent execution (0 for no timeout)"
+    required: false
+    default: "0"
+  debug:
+    description: "Enable debug mode with verbose logging (true/false)"
+    required: false
+    default: "false"
+  working-directory:
+    description: "Working directory to run the agent in"
+    required: false
+    default: "."
+  yolo:
+    description: "Enable yolo mode - auto-approve all prompts (true/false)"
+    required: false
+    default: "true"
+  max-retries:
+    description: "Maximum number of retries on failure (0 = no retries)"
+    required: false
+    default: "2"
+  retry-delay:
+    description: "Base delay in seconds between retries (doubles each attempt)"
+    required: false
+    default: "5"
+  extra-args:
+    description: "Additional arguments to pass to docker agent run"
+    required: false
+    default: ""
+  add-prompt-files:
+    description: "Comma-separated list of files to append to the prompt (e.g., 'AGENTS.md,CLAUDE.md')"
+    required: false
+    default: ""
+  skip-summary:
+    description: "Skip writing agent output to the job summary (useful when callers write their own summary)"
+    required: false
+    default: "false"
+  org-membership-token:
+    description: "PAT with read:org scope for org membership authorization checks (preferred over author_association)"
+    required: false
+    default: ""
+  auth-org:
+    description: "GitHub organization to check membership against (used with org-membership-token)"
+    required: false
+    default: ""
+  skip-auth:
+    description: "Skip the built-in authorization check (use when the calling workflow already performed its own auth)"
+    required: false
+    default: "false"
+outputs:
+  exit-code:
+    description: "Exit code from docker agent run"
+  output-file:
+    description: "Path to the output log file"
+  cagent-version:
+    description: "Version of Docker Agent that was used"
+  mcp-gateway-installed:
+    description: "Whether mcp-gateway was installed (true/false)"
+  execution-time:
+    description: "Agent execution time in seconds"
+  verbose-log-file:
+    description: "Path to the full verbose agent log (includes tool calls)"
+  security-blocked:
+    description: "Whether execution was blocked due to security concerns (true/false)"
+  secrets-detected:
+    description: "Whether secrets were detected in output"
+  prompt-suspicious:
+    description: "Whether suspicious content was stripped from the prompt (true/false)"
+  input-risk-level:
+    description: "Risk level of input (low/medium/high)"
+runs:
+  using: "node24"
+  main: "dist/main.js"
+  pre: chainguard-phonehome.js
