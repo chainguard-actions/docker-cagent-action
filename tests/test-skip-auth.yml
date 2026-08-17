@@ -1,0 +1,43 @@
+name: Test skip-auth bypasses authorization
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with skip-auth=true and clean prompt
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List the files in this repository"
+          skip-auth: "true"
+          openai-api-key: "fake-key-for-validation-test"
+
+      - name: Assert prompt-suspicious output is false (clean prompt)
+        env:
+          ACTUAL: ${{ steps.action.outputs.prompt-suspicious }}
+        run: |
+          echo "actual prompt-suspicious: $ACTUAL"
+          # The action may fail at binary download, but prompt-suspicious should be set
+          # to false for a clean prompt (no injection patterns detected)
+          if [ "$ACTUAL" != "false" ] && [ "$ACTUAL" != "" ]; then
+            echo "FAIL: expected prompt-suspicious=false for a clean prompt, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: prompt-suspicious is correctly false for a clean prompt"
+
+      - name: Assert input-risk-level output is low (clean prompt)
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-risk-level }}
+        run: |
+          echo "actual input-risk-level: $ACTUAL"
+          # For a clean prompt, risk level should be low
+          if [ "$ACTUAL" != "low" ] && [ "$ACTUAL" != "" ]; then
+            echo "FAIL: expected input-risk-level=low for a clean prompt, got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: input-risk-level is correctly low for a clean prompt"

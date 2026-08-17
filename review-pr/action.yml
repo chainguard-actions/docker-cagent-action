@@ -173,14 +173,14 @@ runs:
           AGE=$(( NOW - LOCK_TIME ))
           if [ "$AGE" -lt 600 ]; then  # 600 s lock TTL — intentionally decoupled from the review timeout (now 1800 s)
             echo "⏭️ Review already in progress (started ${AGE}s ago) — skipping"
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "skip-reason=concurrent" >> $GITHUB_OUTPUT
-            echo "lock-age=${AGE}" >> $GITHUB_OUTPUT
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip-reason=concurrent" >> "$GITHUB_OUTPUT"
+            echo "lock-age=${AGE}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "🔓 Stale lock (${AGE}s old) — proceeding"
         fi
-        echo "skip=false" >> $GITHUB_OUTPUT
+        echo "skip=false" >> "$GITHUB_OUTPUT"
 
     - name: Acquire review lock
       if: steps.lock-check.outputs.skip != 'true'
@@ -634,15 +634,17 @@ runs:
         done
 
         if [ "$COUNT" -gt 0 ]; then
-          echo "has_feedback=true" >> $GITHUB_OUTPUT
+          echo "has_feedback=true" >> "$GITHUB_OUTPUT"
+          # Use a random delimiter to prevent heredoc injection
+          FEEDBACK_DELIM="FEEDBACK_EOF_$(openssl rand -hex 16)"
           {
-            echo "prompt<<FEEDBACK_EOF"
+            echo "prompt<<${FEEDBACK_DELIM}"
             echo "$COMBINED"
-            echo "FEEDBACK_EOF"
-          } >> $GITHUB_OUTPUT
+            echo "${FEEDBACK_DELIM}"
+          } >> "$GITHUB_OUTPUT"
           echo "✅ Found $COUNT pending feedback item(s) to process"
         else
-          echo "has_feedback=false" >> $GITHUB_OUTPUT
+          echo "has_feedback=false" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Process pending feedback
@@ -741,7 +743,7 @@ runs:
         fi
 
         # Save prompt to output for the action
-        # Use a random delimiter to prevent heredoc injection via caller-controlled content
+        # Use a random delimiter to prevent heredoc injection
         PROMPT_DELIM="PROMPT_EOF_$(openssl rand -hex 16)"
         {
           echo "review_prompt<<${PROMPT_DELIM}"
@@ -828,7 +830,8 @@ runs:
         SKIP_REASON: ${{ steps.lock-check.outputs.skip-reason }}
         LOCK_AGE: ${{ steps.lock-check.outputs.lock-age }}
       run: |
-        REVIEW_URL="https://github.com/$REPOSITORY/pull/$PR_NUMBER"
+        SAFE_REPOSITORY=$(printf '%s' "$REPOSITORY" | tr -d '\n\r')
+        REVIEW_URL="https://github.com/$SAFE_REPOSITORY/pull/$PR_NUMBER"
         safe_review_url=$(printf '%s' "$REVIEW_URL" | tr -d '\n\r')
         echo "review-url=$safe_review_url" >> "$GITHUB_OUTPUT"
         TIMEOUT_NOTE=""

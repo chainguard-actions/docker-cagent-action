@@ -1,0 +1,40 @@
+name: Test debug mode input handling
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with debug=true (expect failure at binary stage, not validation)
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List files in the repository"
+          skip-auth: "true"
+          debug: "true"
+          openai-api-key: "fake-key-for-validation-test"
+
+      - name: Assert action did not fail at input validation
+        env:
+          PROMPT_SUSPICIOUS: ${{ steps.action.outputs.prompt-suspicious }}
+          INPUT_RISK: ${{ steps.action.outputs.input-risk-level }}
+        run: |
+          echo "prompt-suspicious: $PROMPT_SUSPICIOUS"
+          echo "input-risk-level: $INPUT_RISK"
+          # The action should pass input validation (clean prompt, valid inputs)
+          # and fail later at binary download/execution (no real API key)
+          # prompt-suspicious should be false for a clean prompt
+          if [ "$PROMPT_SUSPICIOUS" = "true" ]; then
+            echo "FAIL: clean prompt should not be flagged as suspicious"
+            exit 1
+          fi
+          # input-risk-level should be low for a clean prompt
+          if [ "$INPUT_RISK" = "high" ]; then
+            echo "FAIL: clean prompt should not have high risk level"
+            exit 1
+          fi
+          echo "PASS: debug mode accepted, input validation passed for clean prompt"

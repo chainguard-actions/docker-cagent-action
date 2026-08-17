@@ -1,0 +1,39 @@
+name: Test google-api-key and aws-bearer-token-bedrock inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List files in the current directory"
+          google-api-key: "fake-google-api-key-for-coverage"
+          aws-bearer-token-bedrock: "fake-aws-bearer-token-for-coverage"
+          skip-auth: "true"
+          timeout: "10"
+          yolo: "true"
+      - name: Assert exit-code output is set
+        env:
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "exit-code: $EXIT_CODE"
+          if [ -z "$EXIT_CODE" ]; then
+            echo "FAIL: exit-code output was not set"
+            exit 1
+          fi
+          echo "PASS: exit-code output is set to '$EXIT_CODE'"
+      - name: Assert security-blocked output is set
+        env:
+          SECURITY_BLOCKED: ${{ steps.action.outputs.security-blocked }}
+        run: |
+          echo "security-blocked: $SECURITY_BLOCKED"
+          if [ -z "$SECURITY_BLOCKED" ]; then
+            echo "FAIL: security-blocked output was not set"
+            exit 1
+          fi
+          echo "PASS: security-blocked is '$SECURITY_BLOCKED'"

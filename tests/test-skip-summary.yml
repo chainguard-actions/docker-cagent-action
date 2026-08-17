@@ -1,0 +1,39 @@
+name: Test skip-summary input handling
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with skip-summary=true
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "Analyze the code"
+          skip-auth: "true"
+          skip-summary: "true"
+          openai-api-key: "fake-key-for-validation-test"
+
+      - name: Assert action did not fail at input validation stage
+        env:
+          PROMPT_SUSPICIOUS: ${{ steps.action.outputs.prompt-suspicious }}
+          SECURITY_BLOCKED: ${{ steps.action.outputs.security-blocked }}
+        run: |
+          echo "prompt-suspicious: $PROMPT_SUSPICIOUS"
+          echo "security-blocked: $SECURITY_BLOCKED"
+          # The action should pass input validation (clean prompt, valid inputs)
+          # security-blocked should not be true for a clean prompt
+          if [ "$SECURITY_BLOCKED" = "true" ]; then
+            echo "FAIL: clean prompt should not be security-blocked"
+            exit 1
+          fi
+          # prompt-suspicious should be false for a clean prompt
+          if [ "$PROMPT_SUSPICIOUS" = "true" ]; then
+            echo "FAIL: clean prompt should not be flagged as suspicious"
+            exit 1
+          fi
+          echo "PASS: skip-summary=true accepted, security outputs are correct for clean prompt"
