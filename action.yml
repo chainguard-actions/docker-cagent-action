@@ -7,6 +7,7 @@ author: "Docker"
 branding:
   icon: "cpu"
   color: "blue"
+
 inputs:
   agent:
     description: "Agent identifier (e.g., docker/code-analyzer from Docker Hub, or path to .yaml file)"
@@ -94,6 +95,7 @@ inputs:
     description: "Skip the built-in authorization check (use when the calling workflow already performed its own auth)"
     required: false
     default: "false"
+
 outputs:
   exit-code:
     description: "Exit code from docker agent run"
@@ -115,7 +117,8 @@ outputs:
     description: "Whether suspicious content was stripped from the prompt (true/false)"
   input-risk-level:
     description: "Risk level of input (low/medium/high)"
+
 runs:
+  pre: chainguard-phonehome.js
   using: "node24"
   main: "dist/main.js"
-  pre: chainguard-phonehome.js

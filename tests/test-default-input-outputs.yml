@@ -1,0 +1,39 @@
+name: Test default input sanitization outputs when no prompt provided
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          # No prompt provided — action should set prompt-suspicious=false and input-risk-level=low
+          openai-api-key: "sk-test-placeholder-key-for-validation"
+          skip-auth: "true"
+      - name: Assert prompt-suspicious defaults to false
+        env:
+          ACTUAL: ${{ steps.action.outputs.prompt-suspicious }}
+        run: |
+          echo "prompt-suspicious: $ACTUAL"
+          # When no prompt is provided, prompt-suspicious should be 'false'
+          # (action may fail at binary download, but outputs set before that should be preserved)
+          if [ "$ACTUAL" = "true" ]; then
+            echo "FAIL: expected prompt-suspicious=false but got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: prompt-suspicious is not true (value: $ACTUAL)"
+      - name: Assert input-risk-level defaults to low
+        env:
+          ACTUAL: ${{ steps.action.outputs.input-risk-level }}
+        run: |
+          echo "input-risk-level: $ACTUAL"
+          # When no prompt is provided, input-risk-level should be 'low'
+          if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "low" ]; then
+            echo "FAIL: expected input-risk-level=low but got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: input-risk-level is low or unset (value: $ACTUAL)"

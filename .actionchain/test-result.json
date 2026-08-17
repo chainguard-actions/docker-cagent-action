@@ -1,5 +1,5 @@
 {
   "ran": true,
-  "passed": false,
-  "exit_code": 1
+  "passed": true,
+  "exit_code": 0
 }

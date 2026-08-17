@@ -107,19 +107,19 @@ runs:
           echo "❌ Could not determine PR number. Provide pr-number input or trigger from a PR event."
           exit 1
         fi
-        safe_pr=$(printf '%s' "$PR_NUMBER" | tr -d '\n\r')
-        echo "pr-number=$safe_pr" >> $GITHUB_OUTPUT
-        echo "✅ Resolved PR number: $safe_pr"
+        safe_pr_number=$(printf '%s' "$PR_NUMBER" | tr -d '\n\r')
+        echo "pr-number=$safe_pr_number" >> "$GITHUB_OUTPUT"
+        echo "✅ Resolved PR number: $safe_pr_number"
 
         # Resolve comment ID: input > comment event (optional, for reactions)
         COMMENT_ID="$COMMENT_ID_INPUT"
         if [ -z "$COMMENT_ID" ]; then
           COMMENT_ID="$EVENT_COMMENT_ID"
         fi
-        safe_comment=$(printf '%s' "$COMMENT_ID" | tr -d '\n\r')
-        echo "comment-id=$safe_comment" >> $GITHUB_OUTPUT
-        if [ -n "$safe_comment" ]; then
-          echo "✅ Resolved comment ID: $safe_comment"
+        safe_comment_id=$(printf '%s' "$COMMENT_ID" | tr -d '\n\r')
+        echo "comment-id=$safe_comment_id" >> "$GITHUB_OUTPUT"
+        if [ -n "$safe_comment_id" ]; then
+          echo "✅ Resolved comment ID: $safe_comment_id"
         else
           echo "ℹ️  No comment ID - reactions will be skipped"
         fi
@@ -136,11 +136,11 @@ runs:
         if [ -n "$EXPLICIT_TOKEN" ]; then
           echo "✅ Using provided github-token"
           safe_token=$(printf '%s' "$EXPLICIT_TOKEN" | tr -d '\n\r')
-          echo "token=$safe_token" >> $GITHUB_OUTPUT
+          echo "token=$safe_token" >> "$GITHUB_OUTPUT"
         else
           echo "ℹ️  Using default github.token"
           safe_token=$(printf '%s' "$DEFAULT_TOKEN" | tr -d '\n\r')
-          echo "token=$safe_token" >> $GITHUB_OUTPUT
+          echo "token=$safe_token" >> "$GITHUB_OUTPUT"
         fi
       env:
         EXPLICIT_TOKEN: ${{ inputs.github-token }}
@@ -638,12 +638,10 @@ runs:
 
         if [ "$COUNT" -gt 0 ]; then
           echo "has_feedback=true" >> $GITHUB_OUTPUT
-          # Use a randomized delimiter to prevent heredoc injection
-          FEEDBACK_DELIM="FEEDBACK_EOF_$(openssl rand -hex 8)"
           {
-            echo "prompt<<${FEEDBACK_DELIM}"
+            echo "prompt<<FEEDBACK_EOF"
             echo "$COMBINED"
-            echo "${FEEDBACK_DELIM}"
+            echo "FEEDBACK_EOF"
           } >> $GITHUB_OUTPUT
           echo "✅ Found $COUNT pending feedback item(s) to process"
         else
@@ -736,25 +734,24 @@ runs:
         } > review_context.md
 
         # Append extra prompt if provided
-        # Sanitize EXTRA_PROMPT: remove the heredoc delimiter to prevent injection
         if [ -n "$EXTRA_PROMPT" ]; then
-          SAFE_EXTRA_PROMPT=$(printf '%s' "$EXTRA_PROMPT" | grep -v '^PROMPT_EOF$')
+          SAFE_EXTRA_PROMPT=$(printf '%s' "$EXTRA_PROMPT" | tr -d '\n\r')
           {
             echo ""
             echo "## Additional Guidelines"
             echo ""
-            printf '%s\n' "$SAFE_EXTRA_PROMPT"
+            echo "$SAFE_EXTRA_PROMPT"
           } >> review_context.md
         fi
 
         # Save prompt to output for the action
-        # Use a randomized delimiter to prevent heredoc injection
-        HEREDOC_DELIM="PROMPT_EOF_$(openssl rand -hex 8)"
+        # Use a random delimiter to prevent heredoc injection from user-controlled content
+        DELIMITER="PROMPT_EOF_$(openssl rand -hex 16)"
         {
-          echo "review_prompt<<${HEREDOC_DELIM}"
+          echo "review_prompt<<${DELIMITER}"
           cat review_context.md
-          echo "${HEREDOC_DELIM}"
-        } >> "$GITHUB_OUTPUT"
+          echo "${DELIMITER}"
+        } >> $GITHUB_OUTPUT
 
     - name: Copy reference files
       if: steps.lock-check.outputs.skip != 'true'
@@ -837,7 +834,8 @@ runs:
         CHUNK_COUNT: ${{ steps.chunk-diff.outputs.chunk_count }}
       run: |
         REVIEW_URL="https://github.com/$REPOSITORY/pull/$PR_NUMBER"
-        echo "review-url=$REVIEW_URL" >> $GITHUB_OUTPUT
+        safe_review_url=$(printf '%s' "$REVIEW_URL" | tr -d '\n\r')
+        echo "review-url=$safe_review_url" >> $GITHUB_OUTPUT
         TIMEOUT_NOTE=""
 
         if [ "$SKIP_REASON" = "concurrent" ]; then

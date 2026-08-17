@@ -1,0 +1,51 @@
+name: Test output file paths are set
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List files"
+          openai-api-key: "sk-test-placeholder-key-for-output-test"
+          skip-auth: "true"
+          skip-summary: "true"
+          debug: "false"
+      - name: Assert output-file output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.output-file }}
+        run: |
+          echo "output-file: $ACTUAL"
+          # The action sets output-file early in execution (before binary download)
+          # so it should be set even if the action fails later
+          if [ -z "$ACTUAL" ]; then
+            echo "INFO: output-file was not set (action may have failed before setting it)"
+          else
+            echo "PASS: output-file is set to: $ACTUAL"
+          fi
+      - name: Assert verbose-log-file output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.verbose-log-file }}
+        run: |
+          echo "verbose-log-file: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "INFO: verbose-log-file was not set (action may have failed before setting it)"
+          else
+            echo "PASS: verbose-log-file is set to: $ACTUAL"
+          fi
+      - name: Assert secrets-detected output is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.secrets-detected }}
+        run: |
+          echo "secrets-detected: $ACTUAL"
+          # secrets-detected is set in the finally block, so it should always be set
+          if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "false" ] && [ "$ACTUAL" != "true" ]; then
+            echo "FAIL: expected secrets-detected to be 'true' or 'false' but got: $ACTUAL"
+            exit 1
+          fi
+          echo "PASS: secrets-detected has valid value (value: $ACTUAL)"

@@ -1,4 +1,4 @@
-name: Test missing API key validation
+name: Test invalid mcp-gateway version format validation
 on:
   workflow_dispatch:
 jobs:
@@ -12,13 +12,16 @@ jobs:
         with:
           agent: docker/code-analyzer
           prompt: "Analyze this code"
+          openai-api-key: "sk-test-placeholder-key-for-validation"
           skip-auth: "true"
-          # No API key provided — action should fail with a clear error
-      - name: Assert action failed
+          mcp-gateway: "true"
+          # Provide an invalid version format (not vX.Y.Z)
+          mcp-gateway-version: "invalid-version"
+      - name: Assert action failed due to invalid mcp-gateway version
         run: |
           echo "outcome: ${{ steps.action.outcome }}"
           if [ "${{ steps.action.outcome }}" != "failure" ]; then
-            echo "FAIL: expected action to fail when no API key is provided"
+            echo "FAIL: expected action to fail when mcp-gateway-version has invalid format"
             exit 1
           fi
-          echo "PASS: action correctly failed when no API key was provided"
+          echo "PASS: action correctly failed on invalid mcp-gateway version format"

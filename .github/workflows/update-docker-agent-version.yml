@@ -1,0 +1,160 @@
+# Copyright The Docker Agent Action authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Update Docker Agent version
+
+on:
+  repository_dispatch:
+    types: [docker-agent-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Docker Agent version (e.g., v1.28.1). Leave empty to use latest release."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup credentials
+        uses: docker/cagent-action/setup-credentials@1b9c152654008dab499d953b01e925e477cd6d5b # v1.5.5
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ env.GITHUB_APP_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@8912a9102ac27614460f54aedde9e1e7f9aec20d # v6.0.5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Build signed-commit CLI
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - name: Determine version
+        id: version
+        env:
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+            echo "Using manual input version: $VERSION"
+          elif [ -n "$DISPATCH_VERSION" ]; then
+            VERSION="$DISPATCH_VERSION"
+            echo "Using dispatched version: $VERSION"
+          else
+            echo "No version specified, fetching latest release from docker/docker-agent..."
+            VERSION=$(gh release view --repo docker/docker-agent --json tagName --jq '.tagName')
+            echo "Latest release: $VERSION"
+          fi
+
+          safe_version=$(printf '%s' "$VERSION" | tr -d '\n\r')
+          echo "version=$safe_version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version exists
+        env:
+          GH_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "Validating that $VERSION exists as a release on docker/docker-agent..."
+          if ! gh release view "$VERSION" --repo docker/docker-agent > /dev/null 2>&1; then
+            echo "❌ Release $VERSION not found on docker/docker-agent"
+            exit 1
+          fi
+          echo "✅ Release $VERSION exists"
+
+      - name: Check current version
+        id: check
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CURRENT=$(cat DOCKER_AGENT_VERSION | tr -d '[:space:]')
+          echo "Current version: $CURRENT"
+          echo "Target version:  $VERSION"
+
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "Already up to date, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version update needed: $CURRENT → $VERSION"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update DOCKER_AGENT_VERSION
+        if: steps.check.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "$VERSION" > DOCKER_AGENT_VERSION
+          echo "Updated DOCKER_AGENT_VERSION to $VERSION"
+
+      - name: Create or update PR
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CURRENT: ${{ steps.check.outputs.current }}
+          EVENT_NAME: ${{ github.event_name }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          BRANCH="auto/update-docker-agent-version"
+          RELEASE_URL="https://github.com/docker/docker-agent/releases/tag/$VERSION"
+
+          COMMIT_OID=$(GITHUB_TOKEN="${GH_TOKEN}" node "$GITHUB_WORKSPACE/dist/signed-commit.js" \
+            --repo docker/cagent-action \
+            --branch "$BRANCH" \
+            --base-ref main \
+            --force \
+            --message "chore: update Docker Agent to $VERSION" \
+            --add DOCKER_AGENT_VERSION)
+
+          echo "✅ Signed commit: $COMMIT_OID"
+
+          # Check if a PR already exists for this branch
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Updating existing PR #$EXISTING_PR"
+            gh pr edit "$EXISTING_PR" \
+              --title "chore: update Docker Agent to $VERSION" \
+              --body "$(cat <<EOF
+          ## Summary
+          Updates \`DOCKER_AGENT_VERSION\` from \`$CURRENT\` to \`$VERSION\`.
+          - **Release**: [$VERSION]($RELEASE_URL)
+          - **Triggered by**: \`$EVENT_NAME\`
+          > Auto-generated by the [update-docker-agent-version]($SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID) workflow.
+          EOF
+          )"
+          else
+            echo "Creating new PR"
+            gh pr create \
+              --head "$BRANCH" \
+              --title "chore: update Docker Agent to $VERSION" \
+              --body "$(cat <<EOF
+          ## Summary
+          Updates \`DOCKER_AGENT_VERSION\` from \`$CURRENT\` to \`$VERSION\`.
+          - **Release**: [$VERSION]($RELEASE_URL)
+          - **Triggered by**: \`$EVENT_NAME\`
+          > Auto-generated by the [update-docker-agent-version]($SERVER_URL/$REPOSITORY/actions/runs/$RUN_ID) workflow.
+          EOF
+          )" \
+              --label "kind/dependencies"
+          fi
