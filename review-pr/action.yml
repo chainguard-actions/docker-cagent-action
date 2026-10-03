@@ -121,19 +121,19 @@ runs:
           echo "❌ Could not determine PR number. Provide pr-number input or trigger from a PR event."
           exit 1
         fi
-        safe_pr_number=$(printf '%s' "$PR_NUMBER" | tr -d '\n\r')
-        echo "pr-number=$safe_pr_number" >> "$GITHUB_OUTPUT"
-        echo "✅ Resolved PR number: $safe_pr_number"
+        safe_pr=$(printf '%s' "$PR_NUMBER" | tr -d '\n\r')
+        echo "pr-number=$safe_pr" >> "$GITHUB_OUTPUT"
+        echo "✅ Resolved PR number: $safe_pr"
 
         # Resolve comment ID: input > comment event (optional, for reactions)
         COMMENT_ID="$COMMENT_ID_INPUT"
         if [ -z "$COMMENT_ID" ]; then
           COMMENT_ID="$EVENT_COMMENT_ID"
         fi
-        safe_comment_id=$(printf '%s' "$COMMENT_ID" | tr -d '\n\r')
-        echo "comment-id=$safe_comment_id" >> "$GITHUB_OUTPUT"
-        if [ -n "$safe_comment_id" ]; then
-          echo "✅ Resolved comment ID: $safe_comment_id"
+        safe_comment=$(printf '%s' "$COMMENT_ID" | tr -d '\n\r')
+        echo "comment-id=$safe_comment" >> "$GITHUB_OUTPUT"
+        if [ -n "$safe_comment" ]; then
+          echo "✅ Resolved comment ID: $safe_comment"
         else
           echo "ℹ️  No comment ID - reactions will be skipped"
         fi
@@ -366,11 +366,10 @@ runs:
 
         if [ "$COUNT" -gt 0 ]; then
           echo "has_feedback=true" >> $GITHUB_OUTPUT
-          FEEDBACK_DELIM="$(openssl rand -hex 16)"
           {
-            echo "prompt<<$FEEDBACK_DELIM"
+            echo "prompt<<FEEDBACK_EOF"
             echo "$COMBINED"
-            echo "$FEEDBACK_DELIM"
+            echo "FEEDBACK_EOF"
           } >> $GITHUB_OUTPUT
           echo "✅ Found $COUNT pending feedback item(s) to process"
         else
@@ -471,7 +470,7 @@ runs:
         fi
 
         # Save prompt to output for the action
-        # Use a random delimiter to prevent heredoc injection via user-controlled content
+        # Use a random delimiter to prevent injection via user-controlled content
         DELIM="PROMPT_EOF_$(openssl rand -hex 16)"
         {
           echo "review_prompt<<${DELIM}"
@@ -547,7 +546,7 @@ runs:
         SKIP_REASON: ${{ steps.lock-check.outputs.skip-reason }}
         LOCK_AGE: ${{ steps.lock-check.outputs.lock-age }}
         CHUNK_COUNT: ${{ steps.chunk-diff.outputs.chunk_count }}
-      run: "REVIEW_URL=\"https://github.com/$REPOSITORY/pull/$PR_NUMBER\"\nSAFE_REVIEW_URL=\"$(printf '%s' \"$REVIEW_URL\" | tr -d '\\n\\r')\"\necho \"review-url=$SAFE_REVIEW_URL\" >> $GITHUB_OUTPUT\nTIMEOUT_NOTE=\"\"\n\nif [ \"$SKIP_REASON\" = \"concurrent\" ]; then\n  # Stay silent — the \U0001F440 reaction on the triggering comment (added by the\n  # run that won the lock) is sufficient feedback that a review is running.\n  # Posting a comment here creates noise and can trigger a comment loop.\n  STATUS=\"⏭️ **Review skipped** — another review is already in progress\"\nelif [ -z \"$EXIT_CODE\" ]; then\n  STATUS=\"⏭️ **Review skipped** — agent did not run\"\nelif [ \"$EXIT_CODE\" = \"124\" ]; then\n  # Timeout (SIGKILL after 2700 s) — provide actionable guidance\n  STATUS=\"⏱️ **Review timed out** (exit code: 124, limit: 2700 s)\"\n  TIMEOUT_NOTE=\"- **Exit code:** 124 (SIGKILL — 2700 s timeout)\"\n  TIMEOUT_NOTE+=$'\\n'\"- **Timeout limit:** 2700 s\"\n  TIMEOUT_NOTE+=$'\\n'\"- Verbose log artifact (${VERBOSE_LOG_FILE}) uploaded for debugging.\"\n  if [ -z \"${CHUNK_COUNT}\" ]; then\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. Diff size is unknown (chunk-diff step did not produce output). Re-request a review from \\`docker-agent\\` to retry, or download the verbose log artifact for details.\"\n  elif [ \"${CHUNK_COUNT}\" = \"1\" ]; then\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. The diff is small (1 chunk), so this may be an agent loop rather than a large-diff problem. Re-request a review from \\`docker-agent\\` to retry. If it times out again, download the verbose log artifact for details.\"\n  else\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. This usually happens on large or complex diffs. Re-request a review from \\`docker-agent\\` to retry — if it times out again, consider splitting the PR into smaller pieces.\"\n  fi\n  if ! gh api \"repos/$REPOSITORY/issues/$PR_NUMBER/comments\" \\\n    -f body=\"$TIMEOUT_BODY\" \\\n    2>&1; then\n    echo \"::warning::Failed to post timeout comment to PR\"\n  fi\nelif [ \"$EXIT_CODE\" != \"0\" ]; then\n  # Check if agent actually posted a review despite the error exit code.\n  # This happens when a sub-agent fails (e.g., API overload) but the root\n  # agent recovers and posts the review itself.\n  if [ -n \"$VERBOSE_LOG_FILE\" ] && grep -qE 'pullrequestreview-[0-9]+' \"$VERBOSE_LOG_FILE\" 2>/dev/null; then\n    echo \"::warning::Agent exited $EXIT_CODE but a review was posted — treating as partial success\"\n    STATUS=\"⚠️ **Review completed with warnings** (exit code: $EXIT_CODE)\"\n  else\n    STATUS=\"❌ **Review failed** (exit code: $EXIT_CODE)\"\n    if ! gh api \"repos/$REPOSITORY/issues/$PR_NUMBER/comments\" \\\n      -f body=\"❌ **PR Review Failed** — The review agent encountered an error and could not complete the review. [View logs]($RUN_URL).\" \\\n      2>&1; then\n      echo \"::warning::Failed to post fallback comment to PR\"\n    fi\n  fi\nelse\n  STATUS=\"✅ **Review completed**\"\nfi\n\n# Override the default summary with a cleaner one for PR reviews\n{\n  echo \"\"\n  echo \"---\"\n  echo \"\"\n  echo \"## PR Review Summary\"\n  echo \"\"\n  echo \"$STATUS\"\n  if [ -n \"$TIMEOUT_NOTE\" ]; then\n    echo \"\"\n    printf '%s\\n' \"$TIMEOUT_NOTE\"\n  fi\n  echo \"\"\n  echo \"\U0001F4DD [View Pull Request #$PR_NUMBER]($REVIEW_URL)\"\n} >> $GITHUB_STEP_SUMMARY\n"
+      run: "REVIEW_URL=\"https://github.com/$REPOSITORY/pull/$PR_NUMBER\"\necho \"review-url=$REVIEW_URL\" >> $GITHUB_OUTPUT\nTIMEOUT_NOTE=\"\"\n\nif [ \"$SKIP_REASON\" = \"concurrent\" ]; then\n  # Stay silent — the \U0001F440 reaction on the triggering comment (added by the\n  # run that won the lock) is sufficient feedback that a review is running.\n  # Posting a comment here creates noise and can trigger a comment loop.\n  STATUS=\"⏭️ **Review skipped** — another review is already in progress\"\nelif [ -z \"$EXIT_CODE\" ]; then\n  STATUS=\"⏭️ **Review skipped** — agent did not run\"\nelif [ \"$EXIT_CODE\" = \"124\" ]; then\n  # Timeout (SIGKILL after 2700 s) — provide actionable guidance\n  STATUS=\"⏱️ **Review timed out** (exit code: 124, limit: 2700 s)\"\n  TIMEOUT_NOTE=\"- **Exit code:** 124 (SIGKILL — 2700 s timeout)\"\n  TIMEOUT_NOTE+=$'\\n'\"- **Timeout limit:** 2700 s\"\n  TIMEOUT_NOTE+=$'\\n'\"- Verbose log artifact (${VERBOSE_LOG_FILE}) uploaded for debugging.\"\n  if [ -z \"${CHUNK_COUNT}\" ]; then\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. Diff size is unknown (chunk-diff step did not produce output). Re-request a review from \\`docker-agent\\` to retry, or download the verbose log artifact for details.\"\n  elif [ \"${CHUNK_COUNT}\" = \"1\" ]; then\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. The diff is small (1 chunk), so this may be an agent loop rather than a large-diff problem. Re-request a review from \\`docker-agent\\` to retry. If it times out again, download the verbose log artifact for details.\"\n  else\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. This usually happens on large or complex diffs. Re-request a review from \\`docker-agent\\` to retry — if it times out again, consider splitting the PR into smaller pieces.\"\n  fi\n  if ! gh api \"repos/$REPOSITORY/issues/$PR_NUMBER/comments\" \\\n    -f body=\"$TIMEOUT_BODY\" \\\n    2>&1; then\n    echo \"::warning::Failed to post timeout comment to PR\"\n  fi\nelif [ \"$EXIT_CODE\" != \"0\" ]; then\n  # Check if agent actually posted a review despite the error exit code.\n  # This happens when a sub-agent fails (e.g., API overload) but the root\n  # agent recovers and posts the review itself.\n  if [ -n \"$VERBOSE_LOG_FILE\" ] && grep -qE 'pullrequestreview-[0-9]+' \"$VERBOSE_LOG_FILE\" 2>/dev/null; then\n    echo \"::warning::Agent exited $EXIT_CODE but a review was posted — treating as partial success\"\n    STATUS=\"⚠️ **Review completed with warnings** (exit code: $EXIT_CODE)\"\n  else\n    STATUS=\"❌ **Review failed** (exit code: $EXIT_CODE)\"\n    if ! gh api \"repos/$REPOSITORY/issues/$PR_NUMBER/comments\" \\\n      -f body=\"❌ **PR Review Failed** — The review agent encountered an error and could not complete the review. [View logs]($RUN_URL).\" \\\n      2>&1; then\n      echo \"::warning::Failed to post fallback comment to PR\"\n    fi\n  fi\nelse\n  STATUS=\"✅ **Review completed**\"\nfi\n\n# Override the default summary with a cleaner one for PR reviews\n{\n  echo \"\"\n  echo \"---\"\n  echo \"\"\n  echo \"## PR Review Summary\"\n  echo \"\"\n  echo \"$STATUS\"\n  if [ -n \"$TIMEOUT_NOTE\" ]; then\n    echo \"\"\n    printf '%s\\n' \"$TIMEOUT_NOTE\"\n  fi\n  echo \"\"\n  echo \"\U0001F4DD [View Pull Request #$PR_NUMBER]($REVIEW_URL)\"\n} >> $GITHUB_STEP_SUMMARY\n"
     - name: Add completion reaction
       if: steps.resolve-context.outputs.comment-id != '' && always() && steps.lock-check.outputs.skip != 'true'
       shell: bash

@@ -7,8 +7,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run action with all API key inputs
-        id: action
+      - id: action
         uses: .
         continue-on-error: true
         with:
@@ -23,7 +22,7 @@ jobs:
           mistral-api-key: "dummy-mistral-key"
           skip-auth: "true"
 
-      - name: Assert action ran (succeeded or failed gracefully on sentinel repo)
+      - name: Assert action ran (inputs accepted, failed gracefully on sentinel repo)
         env:
           OUTCOME: ${{ steps.action.outcome }}
         run: |
