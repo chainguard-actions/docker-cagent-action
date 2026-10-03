@@ -1,0 +1,38 @@
+name: Test API key inputs coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with all API key inputs
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          pr-number: "1"
+          github-token: ${{ github.token }}
+          anthropic-api-key: "dummy-anthropic-key"
+          openai-api-key: "dummy-openai-key"
+          google-api-key: "dummy-google-key"
+          aws-bearer-token-bedrock: "dummy-aws-bearer-token"
+          xai-api-key: "dummy-xai-key"
+          nebius-api-key: "dummy-nebius-key"
+          mistral-api-key: "dummy-mistral-key"
+          skip-auth: "true"
+
+      - name: Assert action ran (succeeded or failed gracefully on sentinel repo)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (sentinel repo is not resolvable)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

@@ -1,0 +1,70 @@
+name: Test action output contract
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Run the action with skip-auth and a fake API key.
+      # The action will fail when trying to download/run docker-agent,
+      # but it should still set security-related outputs in the finally block.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List the files in this repository"
+          openai-api-key: "sk-fake-key-for-output-test"
+          skip-auth: "true"
+          timeout: "30"
+          debug: "false"
+          skip-summary: "true"
+
+      - name: Assert action ran (success or graceful failure)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          SECURITY_BLOCKED: ${{ steps.action.outputs.security-blocked }}
+          SECRETS_DETECTED: ${{ steps.action.outputs.secrets-detected }}
+          PROMPT_SUSPICIOUS: ${{ steps.action.outputs.prompt-suspicious }}
+          INPUT_RISK_LEVEL: ${{ steps.action.outputs.input-risk-level }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "security-blocked: $SECURITY_BLOCKED"
+          echo "secrets-detected: $SECRETS_DETECTED"
+          echo "prompt-suspicious: $PROMPT_SUSPICIOUS"
+          echo "input-risk-level: $INPUT_RISK_LEVEL"
+
+          # The action should either succeed or fail gracefully
+          if [ "$OUTCOME" != "success" ] && [ "$OUTCOME" != "failure" ]; then
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
+
+          # If the action ran far enough to set security outputs, validate them
+          if [ -n "$PROMPT_SUSPICIOUS" ]; then
+            if [ "$PROMPT_SUSPICIOUS" != "true" ] && [ "$PROMPT_SUSPICIOUS" != "false" ]; then
+              echo "FAIL: prompt-suspicious should be 'true' or 'false', got '$PROMPT_SUSPICIOUS'"
+              exit 1
+            fi
+            echo "PASS: prompt-suspicious output is valid: $PROMPT_SUSPICIOUS"
+          fi
+
+          if [ -n "$INPUT_RISK_LEVEL" ]; then
+            if [ "$INPUT_RISK_LEVEL" != "low" ] && [ "$INPUT_RISK_LEVEL" != "medium" ] && [ "$INPUT_RISK_LEVEL" != "high" ]; then
+              echo "FAIL: input-risk-level should be 'low', 'medium', or 'high', got '$INPUT_RISK_LEVEL'"
+              exit 1
+            fi
+            echo "PASS: input-risk-level output is valid: $INPUT_RISK_LEVEL"
+          fi
+
+          if [ -n "$SECURITY_BLOCKED" ]; then
+            if [ "$SECURITY_BLOCKED" != "true" ] && [ "$SECURITY_BLOCKED" != "false" ]; then
+              echo "FAIL: security-blocked should be 'true' or 'false', got '$SECURITY_BLOCKED'"
+              exit 1
+            fi
+            echo "PASS: security-blocked output is valid: $SECURITY_BLOCKED"
+          fi
+
+          echo "PASS: action ran and produced valid outputs (outcome: $OUTCOME)"

@@ -1,0 +1,28 @@
+name: Test missing PR number fails with clear error
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        # No pr-number input provided, no PR event context — should fail at resolve step
+
+      - name: Assert action failed due to missing PR number
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action correctly failed when no PR number could be resolved"
+          elif [ "$OUTCOME" = "success" ]; then
+            echo "FAIL: action should have failed without a PR number"
+            exit 1
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

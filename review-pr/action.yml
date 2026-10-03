@@ -4,7 +4,6 @@
 name: "PR Review with docker-agent"
 description: "AI-powered pull request review with automatic learning from feedback"
 author: "Docker"
-
 inputs:
   pr-number:
     description: "Pull request number to review (auto-detected from github.event if not provided)"
@@ -70,7 +69,6 @@ inputs:
     description: "Auto-filter cap: if the diff exceeds this many lines after removing score-0 files, lowest-risk files are progressively excluded until it fits. Set to 0 to disable. Default: 3000."
     required: false
     default: "3000"
-
 outputs:
   exit-code:
     description: "Exit code from the review"
@@ -78,10 +76,26 @@ outputs:
   review-url:
     description: "URL to the posted review"
     value: ${{ steps.post-summary.outputs.review-url }}
-
 runs:
   using: "composite"
   steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
     # ========================================
     # SETUP
     # ========================================
@@ -123,7 +137,6 @@ runs:
         else
           echo "ℹ️  No comment ID - reactions will be skipped"
         fi
-
     # ========================================
     # GitHub Token Resolution
     # ========================================
@@ -145,7 +158,6 @@ runs:
       env:
         EXPLICIT_TOKEN: ${{ inputs.github-token }}
         DEFAULT_TOKEN: ${{ github.token }}
-
     # Concurrent review guard: best-effort lock using GitHub Actions cache.
     # There is a narrow race window where two runs starting within seconds
     # can both pass the check before either saves its lock. This is accepted
@@ -153,7 +165,7 @@ runs:
     # the window is small enough that it rarely occurs in practice.
     - name: Check for concurrent review
       id: review-lock
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: chainguard-actions/actions-cache/restore@b5b76c7016521bd34554159c882773b3df2e994a # v5.0.5
       with:
         path: .cache/review-lock
         # Exact key will never match (saves include run_id), so this always
@@ -161,64 +173,42 @@ runs:
         key: pr-review-lock-${{ github.repository }}-${{ steps.resolve-context.outputs.pr-number }}-exact
         restore-keys: |
           pr-review-lock-${{ github.repository }}-${{ steps.resolve-context.outputs.pr-number }}-
-
     - name: Evaluate review lock
       id: lock-check
       shell: bash
       env:
         CACHE_MATCHED_KEY: ${{ steps.review-lock.outputs.cache-matched-key }}
-      run: |
-        # cache-hit is only true on exact key match; prefix matches via restore-keys
-        # set cache-matched-key but leave cache-hit as false
-        if [ -n "$CACHE_MATCHED_KEY" ]; then
-          LOCK_TIME=$(cat .cache/review-lock/timestamp 2>/dev/null || echo "0")
-          NOW=$(date +%s)
-          AGE=$(( NOW - LOCK_TIME ))
-          if [ "$AGE" -lt 600 ]; then  # 600 s lock TTL — intentionally decoupled from the review timeout (now 1800 s)
-            echo "⏭️ Review already in progress (started ${AGE}s ago) — skipping"
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "skip-reason=concurrent" >> $GITHUB_OUTPUT
-            echo "lock-age=${AGE}" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          echo "🔓 Stale lock (${AGE}s old) — proceeding"
-        fi
-        echo "skip=false" >> $GITHUB_OUTPUT
-
+      run: "# cache-hit is only true on exact key match; prefix matches via restore-keys\n# set cache-matched-key but leave cache-hit as false\nif [ -n \"$CACHE_MATCHED_KEY\" ]; then\n  LOCK_TIME=$(cat .cache/review-lock/timestamp 2>/dev/null || echo \"0\")\n  NOW=$(date +%s)\n  AGE=$(( NOW - LOCK_TIME ))\n  if [ \"$AGE\" -lt 600 ]; then  # 600 s lock TTL — intentionally decoupled from the review timeout (now 1800 s)\n    echo \"⏭️ Review already in progress (started ${AGE}s ago) — skipping\"\n    echo \"skip=true\" >> $GITHUB_OUTPUT\n    echo \"skip-reason=concurrent\" >> $GITHUB_OUTPUT\n    echo \"lock-age=${AGE}\" >> $GITHUB_OUTPUT\n    exit 0\n  fi\n  echo \"\U0001F513 Stale lock (${AGE}s old) — proceeding\"\nfi\necho \"skip=false\" >> $GITHUB_OUTPUT\n"
     - name: Acquire review lock
       if: steps.lock-check.outputs.skip != 'true'
       shell: bash
       run: |
         mkdir -p .cache/review-lock
         date +%s > .cache/review-lock/timestamp
-
     - name: Save review lock
       if: steps.lock-check.outputs.skip != 'true'
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: chainguard-actions/actions-cache/save@b5b76c7016521bd34554159c882773b3df2e994a # v5.0.5
       with:
         path: .cache/review-lock
         # Use run_id in save key so each run can save (cache keys are immutable)
         # The restore step uses the fixed key with no run_id, so it matches via prefix
         key: pr-review-lock-${{ github.repository }}-${{ steps.resolve-context.outputs.pr-number }}-${{ github.run_id }}
-
     - name: Ensure cache directory exists
       if: steps.lock-check.outputs.skip != 'true'
       shell: bash
       env:
         WORKSPACE: ${{ github.workspace }}
       run: mkdir -p "$WORKSPACE/.cache"
-
     - name: Restore reviewer memory
       if: steps.lock-check.outputs.skip != 'true'
       id: restore-memory
-      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: chainguard-actions/actions-cache/restore@b5b76c7016521bd34554159c882773b3df2e994a # v5.0.5
       with:
         path: ${{ github.workspace }}/.cache/pr-review-memory.db
         key: pr-review-memory-${{ github.repository }}-${{ github.job }}-${{ github.run_id }}
         restore-keys: |
           pr-review-memory-${{ github.repository }}-${{ github.job }}-
           pr-review-memory-${{ github.repository }}-
-
     - name: Add eyes reaction
       if: steps.resolve-context.outputs.comment-id != '' && steps.lock-check.outputs.skip != 'true'
       shell: bash
@@ -229,7 +219,6 @@ runs:
       run: |
         gh api "repos/$REPO/issues/comments/$COMMENT_ID/reactions" \
           -X POST -f content='eyes' || true
-
     - name: Get PR information
       if: steps.lock-check.outputs.skip != 'true'
       id: pr-info
@@ -270,7 +259,6 @@ runs:
             echo "::warning::Could not determine merge base — agent will fetch diff itself"
           fi
         fi
-
     - name: Filter excluded paths from diff
       if: hashFiles('pr.diff') != '' && inputs.exclude-paths != ''
       shell: bash
@@ -279,7 +267,6 @@ runs:
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
       run: |
         node "$ACTION_PATH/../dist/filter-diff.js" pr.diff "$EXCLUDE_PATHS"
-
     - name: Score file risk
       if: hashFiles('pr.diff') != ''
       shell: bash
@@ -290,7 +277,6 @@ runs:
         set -euo pipefail
         node "$ACTION_PATH/../dist/score-risk.js" pr.diff "$EXCLUDE_PATHS"
         echo "✅ File risk scores: $(jq -c . /tmp/file_risk_scores.json)"
-
     - name: Auto-filter low-risk files
       if: hashFiles('pr.diff') != '' && steps.lock-check.outputs.skip != 'true'
       shell: bash
@@ -299,78 +285,11 @@ runs:
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
       run: |
         node "$ACTION_PATH/../dist/auto-filter-diff.js" pr.diff "$MAX_DIFF_LINES"
-
     - name: Split diff into chunks
       if: hashFiles('pr.diff') != ''
       id: chunk-diff
       shell: bash
-      run: |
-        set -euo pipefail
-        # Clean up stale chunk files from previous runs
-        rm -f /tmp/drafter_chunk_*.diff
-        TOTAL_LINES=$(wc -l < pr.diff | tr -d ' ')
-        echo "📄 Diff is $TOTAL_LINES lines"
-
-        if [ "$TOTAL_LINES" -le 1500 ]; then
-          # Small diff — single chunk
-          cp pr.diff /tmp/drafter_chunk_1.diff
-          echo "chunk_count=1" >> $GITHUB_OUTPUT
-          # Build manifest: list all files in the diff
-          FILES=$(grep '^diff --git' pr.diff | sed 's|diff --git a/.* b/||' | jq -R . | jq -s '.')
-          echo "chunk_manifest=$(jq -nc --argjson f "$FILES" '{"1": $f}')" >> $GITHUB_OUTPUT
-          echo "✅ Single chunk ($TOTAL_LINES lines)"
-        else
-          # Large diff — split at file boundaries, targeting ~600 lines per chunk
-          CHUNK=1
-          CHUNK_LINES=0
-          CURRENT_FILE=""
-          CURRENT_DIR=""
-          MANIFEST="{}"
-          CHUNK_FILES="[]"
-
-          # Create first chunk file
-          > /tmp/drafter_chunk_1.diff
-
-          while IFS= read -r line; do
-            if [[ "$line" == "diff --git"* ]]; then
-              FILE=$(echo "$line" | sed 's|diff --git a/.* b/||')
-              DIR=$(dirname "$FILE")
-
-              # Start new chunk if:
-              #   - over soft limit (600 lines) and directory changed, OR
-              #   - over hard limit (2000 lines) regardless of directory
-              if ([ "$CHUNK_LINES" -gt 600 ] && [ "$DIR" != "$CURRENT_DIR" ]) || [ "$CHUNK_LINES" -gt 2000 ]; then
-                # Save current chunk's file list to manifest
-                MANIFEST=$(echo "$MANIFEST" | jq --argjson files "$CHUNK_FILES" --arg k "$CHUNK" '.[$k] = $files')
-                CHUNK=$((CHUNK + 1))
-                CHUNK_LINES=0
-                CHUNK_FILES="[]"
-                > /tmp/drafter_chunk_${CHUNK}.diff
-              fi
-
-              CURRENT_FILE="$FILE"
-              CURRENT_DIR="$DIR"
-              CHUNK_FILES=$(echo "$CHUNK_FILES" | jq --arg f "$FILE" '. += [$f]')
-            fi
-
-            echo "$line" >> /tmp/drafter_chunk_${CHUNK}.diff
-            CHUNK_LINES=$((CHUNK_LINES + 1))
-          done < pr.diff
-
-          # Save final chunk's file list
-          MANIFEST=$(echo "$MANIFEST" | jq --argjson files "$CHUNK_FILES" --arg k "$CHUNK" '.[$k] = $files')
-
-          echo "chunk_count=$CHUNK" >> $GITHUB_OUTPUT
-          echo "chunk_manifest=$(echo "$MANIFEST" | jq -c .)" >> $GITHUB_OUTPUT
-          echo "✅ Split into $CHUNK chunks (target ~600 lines each)"
-
-          for i in $(seq 1 $CHUNK); do
-            LINES=$(wc -l < /tmp/drafter_chunk_${i}.diff | tr -d ' ')
-            FILES_IN_CHUNK=$(echo "$MANIFEST" | jq -r --arg k "$i" '.[$k] | length')
-            echo "  Chunk $i: $LINES lines, $FILES_IN_CHUNK files"
-          done
-        fi
-
+      run: "set -euo pipefail\n# Clean up stale chunk files from previous runs\nrm -f /tmp/drafter_chunk_*.diff\nTOTAL_LINES=$(wc -l < pr.diff | tr -d ' ')\necho \"\U0001F4C4 Diff is $TOTAL_LINES lines\"\n\nif [ \"$TOTAL_LINES\" -le 1500 ]; then\n  # Small diff — single chunk\n  cp pr.diff /tmp/drafter_chunk_1.diff\n  echo \"chunk_count=1\" >> $GITHUB_OUTPUT\n  # Build manifest: list all files in the diff\n  FILES=$(grep '^diff --git' pr.diff | sed 's|diff --git a/.* b/||' | jq -R . | jq -s '.')\n  echo \"chunk_manifest=$(jq -nc --argjson f \"$FILES\" '{\"1\": $f}')\" >> $GITHUB_OUTPUT\n  echo \"✅ Single chunk ($TOTAL_LINES lines)\"\nelse\n  # Large diff — split at file boundaries, targeting ~600 lines per chunk\n  CHUNK=1\n  CHUNK_LINES=0\n  CURRENT_FILE=\"\"\n  CURRENT_DIR=\"\"\n  MANIFEST=\"{}\"\n  CHUNK_FILES=\"[]\"\n\n  # Create first chunk file\n  > /tmp/drafter_chunk_1.diff\n\n  while IFS= read -r line; do\n    if [[ \"$line\" == \"diff --git\"* ]]; then\n      FILE=$(echo \"$line\" | sed 's|diff --git a/.* b/||')\n      DIR=$(dirname \"$FILE\")\n\n      # Start new chunk if:\n      #   - over soft limit (600 lines) and directory changed, OR\n      #   - over hard limit (2000 lines) regardless of directory\n      if ([ \"$CHUNK_LINES\" -gt 600 ] && [ \"$DIR\" != \"$CURRENT_DIR\" ]) || [ \"$CHUNK_LINES\" -gt 2000 ]; then\n        # Save current chunk's file list to manifest\n        MANIFEST=$(echo \"$MANIFEST\" | jq --argjson files \"$CHUNK_FILES\" --arg k \"$CHUNK\" '.[$k] = $files')\n        CHUNK=$((CHUNK + 1))\n        CHUNK_LINES=0\n        CHUNK_FILES=\"[]\"\n        > /tmp/drafter_chunk_${CHUNK}.diff\n      fi\n\n      CURRENT_FILE=\"$FILE\"\n      CURRENT_DIR=\"$DIR\"\n      CHUNK_FILES=$(echo \"$CHUNK_FILES\" | jq --arg f \"$FILE\" '. += [$f]')\n    fi\n\n    echo \"$line\" >> /tmp/drafter_chunk_${CHUNK}.diff\n    CHUNK_LINES=$((CHUNK_LINES + 1))\n  done < pr.diff\n\n  # Save final chunk's file list\n  MANIFEST=$(echo \"$MANIFEST\" | jq --argjson files \"$CHUNK_FILES\" --arg k \"$CHUNK\" '.[$k] = $files')\n\n  echo \"chunk_count=$CHUNK\" >> $GITHUB_OUTPUT\n  echo \"chunk_manifest=$(echo \"$MANIFEST\" | jq -c .)\" >> $GITHUB_OUTPUT\n  echo \"✅ Split into $CHUNK chunks (target ~600 lines each)\"\n\n  for i in $(seq 1 $CHUNK); do\n    LINES=$(wc -l < /tmp/drafter_chunk_${i}.diff | tr -d ' ')\n    FILES_IN_CHUNK=$(echo \"$MANIFEST\" | jq -r --arg k \"$i\" '.[$k] | length')\n    echo \"  Chunk $i: $LINES lines, $FILES_IN_CHUNK files\"\n  done\nfi\n"
     - name: Generate file history
       if: hashFiles('changed_files.txt') != ''
       shell: bash
@@ -388,7 +307,6 @@ runs:
 
         ENTRIES=$(grep -c '^## ' /tmp/file_history.txt 2>/dev/null || echo "0")
         echo "✅ Generated history for $ENTRIES file(s)"
-
     - name: Resolve stale review threads
       if: steps.lock-check.outputs.skip != 'true'
       continue-on-error: true
@@ -397,197 +315,7 @@ runs:
         GH_TOKEN: ${{ steps.resolve-token.outputs.token }}
         PR_NUMBER: ${{ steps.resolve-context.outputs.pr-number }}
         REPO: ${{ github.repository }}
-      run: |
-        echo "🔍 Checking for stale bot review threads to resolve..."
-
-        # A. Parse diff → file:line set
-        # Tracks current file from "diff --git" headers, line numbers from @@ hunks,
-        # and emits "file:line" for each added (+) line.
-        if [ ! -f pr.diff ]; then
-          echo "ℹ️  No pr.diff found — skipping stale thread resolution"
-          exit 0
-        fi
-
-        DIFF_LINES_FILE=$(mktemp)
-        trap "rm -f '$DIFF_LINES_FILE'" EXIT
-
-        awk '
-          /^\+\+\+ b\// {
-            # Extract file path from "+++ b/foo" (unambiguous, unlike diff --git header)
-            file = substr($0, 7)
-          }
-          /^@@ / {
-            # Parse new file line number from "@@ -X,Y +Z,W @@"
-            match($0, /\+([0-9]+)/, arr)
-            line = arr[1]
-            next
-          }
-          /^\+[^+]/ || /^\+$/ {
-            # Added line (but not the +++ header)
-            if (file != "" && line > 0) {
-              print file ":" line
-            }
-            line++
-          }
-          /^ / { line++ }
-          /^-/ { next }
-        ' pr.diff | sort -u > $DIFF_LINES_FILE
-
-        DIFF_LINE_COUNT=$(wc -l < $DIFF_LINES_FILE | tr -d ' ')
-        echo "📄 Found $DIFF_LINE_COUNT unique file:line pairs in diff"
-
-        # B. Fetch all review threads via GraphQL (paginated)
-        OWNER="${REPO%%/*}"
-        REPO_NAME="${REPO##*/}"
-
-        QUERY='
-        query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $pr) {
-              reviewThreads(first: 100, after: $cursor) {
-                pageInfo { hasNextPage endCursor }
-                nodes {
-                  id
-                  isResolved
-                  path
-                  line
-                  comments(first: 5) {
-                    nodes { body }
-                  }
-                }
-              }
-            }
-          }
-        }'
-
-        ALL_THREADS="[]"
-        CURSOR=""
-        PAGE=0
-        FETCH_OK=true
-
-        while true; do
-          PAGE=$((PAGE + 1))
-
-          GQL_ARGS=(-f query="$QUERY" -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR_NUMBER")
-          if [ -n "$CURSOR" ]; then
-            GQL_ARGS+=(-f cursor="$CURSOR")
-          fi
-
-          RESULT=$(gh api graphql "${GQL_ARGS[@]}" 2>&1) || {
-            echo "::warning::GraphQL query failed (page $PAGE): $RESULT"
-            FETCH_OK=false
-            break
-          }
-
-          # Check for GraphQL errors in response (HTTP 200 can still contain errors)
-          if echo "$RESULT" | jq -e '.errors' > /dev/null 2>&1; then
-            echo "::warning::GraphQL returned errors: $(echo "$RESULT" | jq -c '.errors')"
-            FETCH_OK=false
-            break
-          fi
-
-          THREADS=$(echo "$RESULT" | jq '.data.repository.pullRequest.reviewThreads.nodes // []') || {
-            echo "::warning::Failed to parse threads on page $PAGE"
-            FETCH_OK=false
-            break
-          }
-          ALL_THREADS=$(echo "$ALL_THREADS" "$THREADS" | jq -s '.[0] + .[1]') || {
-            echo "::warning::Failed to merge threads on page $PAGE"
-            FETCH_OK=false
-            break
-          }
-
-          HAS_NEXT=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-          if [ "$HAS_NEXT" != "true" ]; then
-            break
-          fi
-          CURSOR=$(echo "$RESULT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
-        done
-
-        if [ "$FETCH_OK" != "true" ]; then
-          echo "::warning::Thread fetch incomplete — skipping resolution to avoid acting on partial data"
-          exit 0
-        fi
-
-        TOTAL_THREADS=$(echo "$ALL_THREADS" | jq 'length')
-        echo "📋 Fetched $TOTAL_THREADS review threads (across $PAGE page(s))"
-
-        # C. Filter to unresolved bot threads (containing <!-- cagent-review --> marker)
-        BOT_THREADS=$(echo "$ALL_THREADS" | jq '[
-          .[] | select(
-            .isResolved == false and
-            (.comments.nodes | any(.body | contains("<!-- cagent-review -->")))
-          )
-        ]')
-
-        BOT_COUNT=$(echo "$BOT_THREADS" | jq 'length')
-        if [ -z "$BOT_COUNT" ] || ! [[ "$BOT_COUNT" =~ ^[0-9]+$ ]]; then
-          echo "::warning::Failed to count bot threads"
-          exit 0
-        fi
-        echo "🤖 Found $BOT_COUNT unresolved bot review thread(s)"
-
-        if [ "$BOT_COUNT" -eq 0 ]; then
-          echo "✅ No stale bot threads to resolve"
-          exit 0
-        fi
-
-        # D. Resolve stale threads (file:line no longer in diff)
-        RESOLVED=0
-        KEPT=0
-
-        for i in $(seq 0 $((BOT_COUNT - 1))); do
-          THREAD_ID=$(echo "$BOT_THREADS" | jq -r ".[$i].id")
-          THREAD_PATH=$(echo "$BOT_THREADS" | jq -r ".[$i].path")
-          THREAD_LINE=$(echo "$BOT_THREADS" | jq -r ".[$i].line")
-
-          # Skip threads with null path (file-level or unknown context)
-          if [ "$THREAD_PATH" = "null" ] || [ -z "$THREAD_PATH" ]; then
-            echo "  ⏭️  Keeping open: thread $THREAD_ID (no file path)"
-            KEPT=$((KEPT + 1))
-            continue
-          fi
-
-          # Null line means GitHub marked the comment "outdated" — the code changed
-          # since the comment was posted and the position is no longer valid.
-          # These are stale by definition and should be resolved.
-          SHOULD_RESOLVE=false
-          if [ "$THREAD_LINE" = "null" ] || [ -z "$THREAD_LINE" ]; then
-            echo "  🔄 Outdated: $THREAD_PATH (position invalidated by push)"
-            SHOULD_RESOLVE=true
-          elif grep -qFx "${THREAD_PATH}:${THREAD_LINE}" "$DIFF_LINES_FILE"; then
-            echo "  ⏭️  Keeping open: ${THREAD_PATH}:${THREAD_LINE} (still in diff)"
-            KEPT=$((KEPT + 1))
-          else
-            echo "  🔄 Stale: ${THREAD_PATH}:${THREAD_LINE} (no longer in diff)"
-            SHOULD_RESOLVE=true
-          fi
-
-          if [ "$SHOULD_RESOLVE" = "true" ]; then
-            MUTATION_RESULT=$(gh api graphql -f query='
-              mutation($threadId: ID!) {
-                resolveReviewThread(input: { threadId: $threadId }) {
-                  thread { id isResolved }
-                }
-              }
-            ' -f threadId="$THREAD_ID" 2>&1) || {
-              echo "  ⚠️  Failed to resolve thread $THREAD_ID (API error)"
-              continue
-            }
-
-            if echo "$MUTATION_RESULT" | jq -e '.errors' > /dev/null 2>&1; then
-              echo "  ⚠️  Failed to resolve thread $THREAD_ID: $(echo "$MUTATION_RESULT" | jq -c '.errors')"
-              continue
-            fi
-
-            echo "  ✅ Resolved thread $THREAD_ID"
-            RESOLVED=$((RESOLVED + 1))
-          fi
-        done
-
-        echo ""
-        echo "📋 Summary: Resolved $RESOLVED thread(s), kept $KEPT thread(s) open"
-
+      run: "echo \"\U0001F50D Checking for stale bot review threads to resolve...\"\n\n# A. Parse diff → file:line set\n# Tracks current file from \"diff --git\" headers, line numbers from @@ hunks,\n# and emits \"file:line\" for each added (+) line.\nif [ ! -f pr.diff ]; then\n  echo \"ℹ️  No pr.diff found — skipping stale thread resolution\"\n  exit 0\nfi\n\nDIFF_LINES_FILE=$(mktemp)\ntrap \"rm -f '$DIFF_LINES_FILE'\" EXIT\n\nawk '\n  /^\\+\\+\\+ b\\// {\n    # Extract file path from \"+++ b/foo\" (unambiguous, unlike diff --git header)\n    file = substr($0, 7)\n  }\n  /^@@ / {\n    # Parse new file line number from \"@@ -X,Y +Z,W @@\"\n    match($0, /\\+([0-9]+)/, arr)\n    line = arr[1]\n    next\n  }\n  /^\\+[^+]/ || /^\\+$/ {\n    # Added line (but not the +++ header)\n    if (file != \"\" && line > 0) {\n      print file \":\" line\n    }\n    line++\n  }\n  /^ / { line++ }\n  /^-/ { next }\n' pr.diff | sort -u > $DIFF_LINES_FILE\n\nDIFF_LINE_COUNT=$(wc -l < $DIFF_LINES_FILE | tr -d ' ')\necho \"\U0001F4C4 Found $DIFF_LINE_COUNT unique file:line pairs in diff\"\n\n# B. Fetch all review threads via GraphQL (paginated)\nOWNER=\"${REPO%%/*}\"\nREPO_NAME=\"${REPO##*/}\"\n\nQUERY='\nquery($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {\n  repository(owner: $owner, name: $repo) {\n    pullRequest(number: $pr) {\n      reviewThreads(first: 100, after: $cursor) {\n        pageInfo { hasNextPage endCursor }\n        nodes {\n          id\n          isResolved\n          path\n          line\n          comments(first: 5) {\n            nodes { body }\n          }\n        }\n      }\n    }\n  }\n}'\n\nALL_THREADS=\"[]\"\nCURSOR=\"\"\nPAGE=0\nFETCH_OK=true\n\nwhile true; do\n  PAGE=$((PAGE + 1))\n\n  GQL_ARGS=(-f query=\"$QUERY\" -f owner=\"$OWNER\" -f repo=\"$REPO_NAME\" -F pr=\"$PR_NUMBER\")\n  if [ -n \"$CURSOR\" ]; then\n    GQL_ARGS+=(-f cursor=\"$CURSOR\")\n  fi\n\n  RESULT=$(gh api graphql \"${GQL_ARGS[@]}\" 2>&1) || {\n    echo \"::warning::GraphQL query failed (page $PAGE): $RESULT\"\n    FETCH_OK=false\n    break\n  }\n\n  # Check for GraphQL errors in response (HTTP 200 can still contain errors)\n  if echo \"$RESULT\" | jq -e '.errors' > /dev/null 2>&1; then\n    echo \"::warning::GraphQL returned errors: $(echo \"$RESULT\" | jq -c '.errors')\"\n    FETCH_OK=false\n    break\n  fi\n\n  THREADS=$(echo \"$RESULT\" | jq '.data.repository.pullRequest.reviewThreads.nodes // []') || {\n    echo \"::warning::Failed to parse threads on page $PAGE\"\n    FETCH_OK=false\n    break\n  }\n  ALL_THREADS=$(echo \"$ALL_THREADS\" \"$THREADS\" | jq -s '.[0] + .[1]') || {\n    echo \"::warning::Failed to merge threads on page $PAGE\"\n    FETCH_OK=false\n    break\n  }\n\n  HAS_NEXT=$(echo \"$RESULT\" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')\n  if [ \"$HAS_NEXT\" != \"true\" ]; then\n    break\n  fi\n  CURSOR=$(echo \"$RESULT\" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')\ndone\n\nif [ \"$FETCH_OK\" != \"true\" ]; then\n  echo \"::warning::Thread fetch incomplete — skipping resolution to avoid acting on partial data\"\n  exit 0\nfi\n\nTOTAL_THREADS=$(echo \"$ALL_THREADS\" | jq 'length')\necho \"\U0001F4CB Fetched $TOTAL_THREADS review threads (across $PAGE page(s))\"\n\n# C. Filter to unresolved bot threads (containing <!-- cagent-review --> marker)\nBOT_THREADS=$(echo \"$ALL_THREADS\" | jq '[\n  .[] | select(\n    .isResolved == false and\n    (.comments.nodes | any(.body | contains(\"<!-- cagent-review -->\")))\n  )\n]')\n\nBOT_COUNT=$(echo \"$BOT_THREADS\" | jq 'length')\nif [ -z \"$BOT_COUNT\" ] || ! [[ \"$BOT_COUNT\" =~ ^[0-9]+$ ]]; then\n  echo \"::warning::Failed to count bot threads\"\n  exit 0\nfi\necho \"\U0001F916 Found $BOT_COUNT unresolved bot review thread(s)\"\n\nif [ \"$BOT_COUNT\" -eq 0 ]; then\n  echo \"✅ No stale bot threads to resolve\"\n  exit 0\nfi\n\n# D. Resolve stale threads (file:line no longer in diff)\nRESOLVED=0\nKEPT=0\n\nfor i in $(seq 0 $((BOT_COUNT - 1))); do\n  THREAD_ID=$(echo \"$BOT_THREADS\" | jq -r \".[$i].id\")\n  THREAD_PATH=$(echo \"$BOT_THREADS\" | jq -r \".[$i].path\")\n  THREAD_LINE=$(echo \"$BOT_THREADS\" | jq -r \".[$i].line\")\n\n  # Skip threads with null path (file-level or unknown context)\n  if [ \"$THREAD_PATH\" = \"null\" ] || [ -z \"$THREAD_PATH\" ]; then\n    echo \"  ⏭️  Keeping open: thread $THREAD_ID (no file path)\"\n    KEPT=$((KEPT + 1))\n    continue\n  fi\n\n  # Null line means GitHub marked the comment \"outdated\" — the code changed\n  # since the comment was posted and the position is no longer valid.\n  # These are stale by definition and should be resolved.\n  SHOULD_RESOLVE=false\n  if [ \"$THREAD_LINE\" = \"null\" ] || [ -z \"$THREAD_LINE\" ]; then\n    echo \"  \U0001F504 Outdated: $THREAD_PATH (position invalidated by push)\"\n    SHOULD_RESOLVE=true\n  elif grep -qFx \"${THREAD_PATH}:${THREAD_LINE}\" \"$DIFF_LINES_FILE\"; then\n    echo \"  ⏭️  Keeping open: ${THREAD_PATH}:${THREAD_LINE} (still in diff)\"\n    KEPT=$((KEPT + 1))\n  else\n    echo \"  \U0001F504 Stale: ${THREAD_PATH}:${THREAD_LINE} (no longer in diff)\"\n    SHOULD_RESOLVE=true\n  fi\n\n  if [ \"$SHOULD_RESOLVE\" = \"true\" ]; then\n    MUTATION_RESULT=$(gh api graphql -f query='\n      mutation($threadId: ID!) {\n        resolveReviewThread(input: { threadId: $threadId }) {\n          thread { id isResolved }\n        }\n      }\n    ' -f threadId=\"$THREAD_ID\" 2>&1) || {\n      echo \"  ⚠️  Failed to resolve thread $THREAD_ID (API error)\"\n      continue\n    }\n\n    if echo \"$MUTATION_RESULT\" | jq -e '.errors' > /dev/null 2>&1; then\n      echo \"  ⚠️  Failed to resolve thread $THREAD_ID: $(echo \"$MUTATION_RESULT\" | jq -c '.errors')\"\n      continue\n    fi\n\n    echo \"  ✅ Resolved thread $THREAD_ID\"\n    RESOLVED=$((RESOLVED + 1))\n  fi\ndone\n\necho \"\"\necho \"\U0001F4CB Summary: Resolved $RESOLVED thread(s), kept $KEPT thread(s) open\"\n"
     # ========================================
     # PROCESS PENDING FEEDBACK
     # Downloads feedback artifacts left by capture-feedback jobs
@@ -638,16 +366,16 @@ runs:
 
         if [ "$COUNT" -gt 0 ]; then
           echo "has_feedback=true" >> $GITHUB_OUTPUT
+          FEEDBACK_DELIM="$(openssl rand -hex 16)"
           {
-            echo "prompt<<FEEDBACK_EOF"
+            echo "prompt<<$FEEDBACK_DELIM"
             echo "$COMBINED"
-            echo "FEEDBACK_EOF"
+            echo "$FEEDBACK_DELIM"
           } >> $GITHUB_OUTPUT
           echo "✅ Found $COUNT pending feedback item(s) to process"
         else
           echo "has_feedback=false" >> $GITHUB_OUTPUT
         fi
-
     - name: Process pending feedback
       if: steps.lock-check.outputs.skip != 'true' && steps.pending-feedback.outputs.has_feedback == 'true'
       continue-on-error: true
@@ -667,7 +395,7 @@ runs:
           3. If they're agreeing and adding context, store the additional insight
 
           Use add_memory to record what you learned from each feedback item.
-        timeout: "180"  # 3 min — haiku call; prevents hang from eating the 35-min job budget
+        timeout: "180" # 3 min — haiku call; prevents hang from eating the 35-min job budget
         anthropic-api-key: ${{ inputs.anthropic-api-key }}
         openai-api-key: ${{ inputs.openai-api-key }}
         google-api-key: ${{ inputs.google-api-key }}
@@ -681,7 +409,6 @@ runs:
         org-membership-token: ${{ inputs.org-membership-token }}
         auth-org: ${{ inputs.auth-org }}
         skip-auth: ${{ inputs.skip-auth }}
-
     # ========================================
     # BUILD REVIEW CONTEXT
     # ========================================
@@ -735,24 +462,22 @@ runs:
 
         # Append extra prompt if provided
         if [ -n "$EXTRA_PROMPT" ]; then
-          SAFE_EXTRA_PROMPT=$(printf '%s' "$EXTRA_PROMPT" | tr -d '\n\r')
           {
             echo ""
             echo "## Additional Guidelines"
             echo ""
-            echo "$SAFE_EXTRA_PROMPT"
+            echo "$EXTRA_PROMPT"
           } >> review_context.md
         fi
 
         # Save prompt to output for the action
-        # Use a random delimiter to prevent heredoc injection from user-controlled content
-        DELIMITER="PROMPT_EOF_$(openssl rand -hex 16)"
+        # Use a random delimiter to prevent heredoc injection via user-controlled content
+        DELIM="PROMPT_EOF_$(openssl rand -hex 16)"
         {
-          echo "review_prompt<<${DELIMITER}"
+          echo "review_prompt<<${DELIM}"
           cat review_context.md
-          echo "${DELIMITER}"
-        } >> $GITHUB_OUTPUT
-
+          echo "${DELIM}"
+        } >> "$GITHUB_OUTPUT"
     - name: Copy reference files
       if: steps.lock-check.outputs.skip != 'true'
       shell: bash
@@ -761,7 +486,6 @@ runs:
       run: |
         mkdir -p /tmp/refs
         cp "$ACTION_PATH"/agents/refs/*.md /tmp/refs/
-
     # ========================================
     # RUN REVIEW using root cagent-action
     # ========================================
@@ -774,7 +498,7 @@ runs:
       with:
         agent: ${{ env.ACTION_PATH }}/agents/pr-review.yaml
         prompt: ${{ steps.context.outputs.review_prompt }}
-        timeout: "2700"  # 45 min — allows complex reviews to complete; lock TTL (600 s) is intentionally shorter
+        timeout: "2700" # 45 min — allows complex reviews to complete; lock TTL (600 s) is intentionally shorter
         anthropic-api-key: ${{ inputs.anthropic-api-key }}
         openai-api-key: ${{ inputs.openai-api-key }}
         google-api-key: ${{ inputs.google-api-key }}
@@ -785,36 +509,27 @@ runs:
         github-token: ${{ steps.resolve-token.outputs.token }}
         extra-args: ${{ inputs.model && format('--model={0}', inputs.model) || '' }}
         add-prompt-files: ${{ inputs.add-prompt-files }}
-        max-retries: "1"  # One retry handles transient API failures (e.g. Anthropic 400s) without risking duplicate reviews from full pipeline restarts
+        max-retries: "1" # One retry handles transient API failures (e.g. Anthropic 400s) without risking duplicate reviews from full pipeline restarts
         skip-summary: "true"
         org-membership-token: ${{ inputs.org-membership-token }}
         auth-org: ${{ inputs.auth-org }}
         skip-auth: ${{ inputs.skip-auth }}
-
     - name: Release review lock
       if: always() && steps.lock-check.outputs.skip != 'true'
-      continue-on-error: true  # Release failures are safe — stale locks expire via TTL (600s)
+      continue-on-error: true # Release failures are safe — stale locks expire via TTL (600s)
       shell: bash
       env:
         GH_TOKEN: ${{ steps.resolve-token.outputs.token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.resolve-context.outputs.pr-number }}
-      run: |
-        # Delete all cache entries matching this PR's lock prefix
-        gh api --paginate "repos/$REPO/actions/caches?key=pr-review-lock-${REPO}-${PR_NUMBER}-" \
-          --jq '.actions_caches[].id' 2>/dev/null | while read -r CACHE_ID; do
-          gh api "repos/$REPO/actions/caches/$CACHE_ID" -X DELETE 2>/dev/null || true
-        done
-        echo "🔓 Released review lock for PR #$PR_NUMBER"
-
+      run: "# Delete all cache entries matching this PR's lock prefix\ngh api --paginate \"repos/$REPO/actions/caches?key=pr-review-lock-${REPO}-${PR_NUMBER}-\" \\\n  --jq '.actions_caches[].id' 2>/dev/null | while read -r CACHE_ID; do\n  gh api \"repos/$REPO/actions/caches/$CACHE_ID\" -X DELETE 2>/dev/null || true\ndone\necho \"\U0001F513 Released review lock for PR #$PR_NUMBER\"\n"
     - name: Save reviewer memory
       if: always() && steps.lock-check.outputs.skip != 'true'
-      continue-on-error: true  # Don't fail if memory file doesn't exist (first run)
-      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      continue-on-error: true # Don't fail if memory file doesn't exist (first run)
+      uses: chainguard-actions/actions-cache/save@b5b76c7016521bd34554159c882773b3df2e994a # v5.0.5
       with:
         path: ${{ github.workspace }}/.cache/pr-review-memory.db
         key: pr-review-memory-${{ github.repository }}-${{ github.job }}-${{ github.run_id }}
-
     # ========================================
     # POST-REVIEW: Clean summary & reactions
     # ========================================
@@ -832,72 +547,7 @@ runs:
         SKIP_REASON: ${{ steps.lock-check.outputs.skip-reason }}
         LOCK_AGE: ${{ steps.lock-check.outputs.lock-age }}
         CHUNK_COUNT: ${{ steps.chunk-diff.outputs.chunk_count }}
-      run: |
-        REVIEW_URL="https://github.com/$REPOSITORY/pull/$PR_NUMBER"
-        safe_review_url=$(printf '%s' "$REVIEW_URL" | tr -d '\n\r')
-        echo "review-url=$safe_review_url" >> $GITHUB_OUTPUT
-        TIMEOUT_NOTE=""
-
-        if [ "$SKIP_REASON" = "concurrent" ]; then
-          # Stay silent — the 👀 reaction on the triggering comment (added by the
-          # run that won the lock) is sufficient feedback that a review is running.
-          # Posting a comment here creates noise and can trigger a comment loop.
-          STATUS="⏭️ **Review skipped** — another review is already in progress"
-        elif [ -z "$EXIT_CODE" ]; then
-          STATUS="⏭️ **Review skipped** — agent did not run"
-        elif [ "$EXIT_CODE" = "124" ]; then
-          # Timeout (SIGKILL after 2700 s) — provide actionable guidance
-          STATUS="⏱️ **Review timed out** (exit code: 124, limit: 2700 s)"
-          TIMEOUT_NOTE="- **Exit code:** 124 (SIGKILL — 2700 s timeout)"
-          TIMEOUT_NOTE+=$'\n'"- **Timeout limit:** 2700 s"
-          TIMEOUT_NOTE+=$'\n'"- Verbose log artifact (${VERBOSE_LOG_FILE}) uploaded for debugging."
-          if [ -z "${CHUNK_COUNT}" ]; then
-            TIMEOUT_BODY="⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. Diff size is unknown (chunk-diff step did not produce output). Re-request a review from \`docker-agent\` to retry, or download the verbose log artifact for details."
-          elif [ "${CHUNK_COUNT}" = "1" ]; then
-            TIMEOUT_BODY="⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. The diff is small (1 chunk), so this may be an agent loop rather than a large-diff problem. Re-request a review from \`docker-agent\` to retry. If it times out again, download the verbose log artifact for details."
-          else
-            TIMEOUT_BODY="⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. This usually happens on large or complex diffs. Re-request a review from \`docker-agent\` to retry — if it times out again, consider splitting the PR into smaller pieces."
-          fi
-          if ! gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" \
-            -f body="$TIMEOUT_BODY" \
-            2>&1; then
-            echo "::warning::Failed to post timeout comment to PR"
-          fi
-        elif [ "$EXIT_CODE" != "0" ]; then
-          # Check if agent actually posted a review despite the error exit code.
-          # This happens when a sub-agent fails (e.g., API overload) but the root
-          # agent recovers and posts the review itself.
-          if [ -n "$VERBOSE_LOG_FILE" ] && grep -qE 'pullrequestreview-[0-9]+' "$VERBOSE_LOG_FILE" 2>/dev/null; then
-            echo "::warning::Agent exited $EXIT_CODE but a review was posted — treating as partial success"
-            STATUS="⚠️ **Review completed with warnings** (exit code: $EXIT_CODE)"
-          else
-            STATUS="❌ **Review failed** (exit code: $EXIT_CODE)"
-            if ! gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments" \
-              -f body="❌ **PR Review Failed** — The review agent encountered an error and could not complete the review. [View logs]($RUN_URL)." \
-              2>&1; then
-              echo "::warning::Failed to post fallback comment to PR"
-            fi
-          fi
-        else
-          STATUS="✅ **Review completed**"
-        fi
-
-        # Override the default summary with a cleaner one for PR reviews
-        {
-          echo ""
-          echo "---"
-          echo ""
-          echo "## PR Review Summary"
-          echo ""
-          echo "$STATUS"
-          if [ -n "$TIMEOUT_NOTE" ]; then
-            echo ""
-            printf '%s\n' "$TIMEOUT_NOTE"
-          fi
-          echo ""
-          echo "📝 [View Pull Request #$PR_NUMBER]($REVIEW_URL)"
-        } >> $GITHUB_STEP_SUMMARY
-
+      run: "REVIEW_URL=\"https://github.com/$REPOSITORY/pull/$PR_NUMBER\"\nSAFE_REVIEW_URL=\"$(printf '%s' \"$REVIEW_URL\" | tr -d '\\n\\r')\"\necho \"review-url=$SAFE_REVIEW_URL\" >> $GITHUB_OUTPUT\nTIMEOUT_NOTE=\"\"\n\nif [ \"$SKIP_REASON\" = \"concurrent\" ]; then\n  # Stay silent — the \U0001F440 reaction on the triggering comment (added by the\n  # run that won the lock) is sufficient feedback that a review is running.\n  # Posting a comment here creates noise and can trigger a comment loop.\n  STATUS=\"⏭️ **Review skipped** — another review is already in progress\"\nelif [ -z \"$EXIT_CODE\" ]; then\n  STATUS=\"⏭️ **Review skipped** — agent did not run\"\nelif [ \"$EXIT_CODE\" = \"124\" ]; then\n  # Timeout (SIGKILL after 2700 s) — provide actionable guidance\n  STATUS=\"⏱️ **Review timed out** (exit code: 124, limit: 2700 s)\"\n  TIMEOUT_NOTE=\"- **Exit code:** 124 (SIGKILL — 2700 s timeout)\"\n  TIMEOUT_NOTE+=$'\\n'\"- **Timeout limit:** 2700 s\"\n  TIMEOUT_NOTE+=$'\\n'\"- Verbose log artifact (${VERBOSE_LOG_FILE}) uploaded for debugging.\"\n  if [ -z \"${CHUNK_COUNT}\" ]; then\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. Diff size is unknown (chunk-diff step did not produce output). Re-request a review from \\`docker-agent\\` to retry, or download the verbose log artifact for details.\"\n  elif [ \"${CHUNK_COUNT}\" = \"1\" ]; then\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. The diff is small (1 chunk), so this may be an agent loop rather than a large-diff problem. Re-request a review from \\`docker-agent\\` to retry. If it times out again, download the verbose log artifact for details.\"\n  else\n    TIMEOUT_BODY=\"⏱️ **PR Review Timed Out** — The review agent hit the 2700 s time limit. This usually happens on large or complex diffs. Re-request a review from \\`docker-agent\\` to retry — if it times out again, consider splitting the PR into smaller pieces.\"\n  fi\n  if ! gh api \"repos/$REPOSITORY/issues/$PR_NUMBER/comments\" \\\n    -f body=\"$TIMEOUT_BODY\" \\\n    2>&1; then\n    echo \"::warning::Failed to post timeout comment to PR\"\n  fi\nelif [ \"$EXIT_CODE\" != \"0\" ]; then\n  # Check if agent actually posted a review despite the error exit code.\n  # This happens when a sub-agent fails (e.g., API overload) but the root\n  # agent recovers and posts the review itself.\n  if [ -n \"$VERBOSE_LOG_FILE\" ] && grep -qE 'pullrequestreview-[0-9]+' \"$VERBOSE_LOG_FILE\" 2>/dev/null; then\n    echo \"::warning::Agent exited $EXIT_CODE but a review was posted — treating as partial success\"\n    STATUS=\"⚠️ **Review completed with warnings** (exit code: $EXIT_CODE)\"\n  else\n    STATUS=\"❌ **Review failed** (exit code: $EXIT_CODE)\"\n    if ! gh api \"repos/$REPOSITORY/issues/$PR_NUMBER/comments\" \\\n      -f body=\"❌ **PR Review Failed** — The review agent encountered an error and could not complete the review. [View logs]($RUN_URL).\" \\\n      2>&1; then\n      echo \"::warning::Failed to post fallback comment to PR\"\n    fi\n  fi\nelse\n  STATUS=\"✅ **Review completed**\"\nfi\n\n# Override the default summary with a cleaner one for PR reviews\n{\n  echo \"\"\n  echo \"---\"\n  echo \"\"\n  echo \"## PR Review Summary\"\n  echo \"\"\n  echo \"$STATUS\"\n  if [ -n \"$TIMEOUT_NOTE\" ]; then\n    echo \"\"\n    printf '%s\\n' \"$TIMEOUT_NOTE\"\n  fi\n  echo \"\"\n  echo \"\U0001F4DD [View Pull Request #$PR_NUMBER]($REVIEW_URL)\"\n} >> $GITHUB_STEP_SUMMARY\n"
     - name: Add completion reaction
       if: steps.resolve-context.outputs.comment-id != '' && always() && steps.lock-check.outputs.skip != 'true'
       shell: bash
