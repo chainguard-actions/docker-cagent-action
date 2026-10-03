@@ -1,0 +1,45 @@
+name: Test auth passes for non-comment events
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "List files in the repository"
+          # skip-auth is false (default) — for workflow_dispatch (non-comment event),
+          # auth should pass at Tier 1 and proceed to binary setup
+          skip-auth: "false"
+          openai-api-key: "sk-fake-key-for-testing"
+          skip-summary: "true"
+          timeout: "30"
+
+      - name: Assert action passed auth check (failed at binary setup, not auth)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          SECURITY_BLOCKED: ${{ steps.action.outputs.security-blocked }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "security-blocked: $SECURITY_BLOCKED"
+          # The action should fail (no real docker agent binary available),
+          # but it should NOT be blocked by auth (non-comment event passes auth).
+          # security-blocked should be 'false' since no security issue occurred.
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded (unexpected but acceptable)"
+          elif [ "$OUTCOME" = "failure" ]; then
+            # Acceptable — binary setup will fail without real docker agent
+            if [ "$SECURITY_BLOCKED" = "true" ]; then
+              echo "FAIL: action was security-blocked but should have passed auth for non-comment event"
+              exit 1
+            fi
+            echo "PASS: action failed at binary setup (not at auth), as expected for non-comment event"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

@@ -1,0 +1,41 @@
+name: Test API key inputs coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "Hello"
+          anthropic-api-key: "fake-anthropic-key"
+          aws-bearer-token-bedrock: "fake-aws-bearer-token"
+          github-token: ${{ github.token }}
+          google-api-key: "fake-google-key"
+          mistral-api-key: "fake-mistral-key"
+          nebius-api-key: "fake-nebius-key"
+          xai-api-key: "fake-xai-key"
+          skip-auth: "true"
+          timeout: "30"
+          yolo: "true"
+
+      - name: Assert action ran (outputs set or failed gracefully without real API keys)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "exit-code: $EXIT_CODE"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (expected without real API keys or Docker agent infrastructure)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

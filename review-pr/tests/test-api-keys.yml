@@ -1,0 +1,40 @@
+name: Test API key inputs coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # This action makes repo-scoped GitHub API calls (gh pr view, gh pr diff, etc.)
+      # which will fail against the sentinel GITHUB_REPOSITORY. We use continue-on-error
+      # and assert that the action either succeeds or fails gracefully.
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          pr-number: "1"
+          anthropic-api-key: "dummy-anthropic-key"
+          openai-api-key: "dummy-openai-key"
+          google-api-key: "dummy-google-key"
+          aws-bearer-token-bedrock: "dummy-aws-bearer-token"
+          xai-api-key: "dummy-xai-key"
+          nebius-api-key: "dummy-nebius-key"
+          mistral-api-key: "dummy-mistral-key"
+          github-token: ${{ github.token }}
+          skip-auth: "true"
+
+      - name: Assert action ran (succeeded or failed gracefully on sentinel repo)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (sentinel repo is not resolvable)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

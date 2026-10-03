@@ -1,0 +1,49 @@
+name: Test skip-auth with early outputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "Summarize the repository"
+          skip-auth: "true"
+          openai-api-key: "sk-fake-key-for-testing"
+          timeout: "30"
+          debug: "false"
+          skip-summary: "true"
+
+      - name: Assert prompt-suspicious output is set
+        env:
+          PROMPT_SUSPICIOUS: ${{ steps.action.outputs.prompt-suspicious }}
+          RISK_LEVEL: ${{ steps.action.outputs.input-risk-level }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "prompt-suspicious: $PROMPT_SUSPICIOUS"
+          echo "input-risk-level: $RISK_LEVEL"
+          # The action either succeeds (unlikely without real docker agent) or fails
+          # at binary setup. Either way, prompt-suspicious and input-risk-level
+          # should be set since they are set before binary setup.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            # prompt-suspicious should be 'false' for a benign prompt
+            if [ -n "$PROMPT_SUSPICIOUS" ] && [ "$PROMPT_SUSPICIOUS" != "false" ]; then
+              echo "FAIL: expected prompt-suspicious to be 'false' for benign prompt, got '$PROMPT_SUSPICIOUS'"
+              exit 1
+            fi
+            # input-risk-level should be 'low' for a benign prompt
+            if [ -n "$RISK_LEVEL" ] && [ "$RISK_LEVEL" != "low" ]; then
+              echo "FAIL: expected input-risk-level to be 'low' for benign prompt, got '$RISK_LEVEL'"
+              exit 1
+            fi
+            echo "PASS: prompt outputs are correct"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

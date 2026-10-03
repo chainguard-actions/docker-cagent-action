@@ -1,0 +1,32 @@
+name: Test graceful failure without AWS OIDC
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Invoke setup-credentials action
+        id: action
+        uses: .
+        continue-on-error: true
+
+      - name: Assert action ran and failed gracefully (no AWS OIDC in harness)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully as expected (no AWS OIDC available in harness)"
+          elif [ "$OUTCOME" = "success" ]; then
+            # If somehow credentials were obtained, GITHUB_APP_TOKEN must be set
+            if [ -z "$GITHUB_APP_TOKEN" ]; then
+              echo "FAIL: action reported success but GITHUB_APP_TOKEN is not set"
+              exit 1
+            fi
+            echo "PASS: action succeeded and GITHUB_APP_TOKEN is set"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

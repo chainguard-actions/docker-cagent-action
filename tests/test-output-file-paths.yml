@@ -1,0 +1,59 @@
+name: Test output file paths are set
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          agent: docker/code-analyzer
+          prompt: "Analyze this repository"
+          skip-auth: "true"
+          openai-api-key: "sk-fake-key-for-testing"
+          skip-summary: "true"
+          timeout: "30"
+
+      - name: Assert output-file and verbose-log-file are set
+        env:
+          OUTPUT_FILE: ${{ steps.action.outputs.output-file }}
+          VERBOSE_LOG_FILE: ${{ steps.action.outputs.verbose-log-file }}
+          CAGENT_VERSION: ${{ steps.action.outputs.cagent-version }}
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "output-file: $OUTPUT_FILE"
+          echo "verbose-log-file: $VERBOSE_LOG_FILE"
+          echo "cagent-version: $CAGENT_VERSION"
+          # The action may succeed or fail at binary setup, but output paths
+          # should be set if the action got past prompt sanitization
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            # output-file and verbose-log-file are set after binary setup
+            # They may be empty if the action failed before that point
+            if [ -n "$OUTPUT_FILE" ]; then
+              echo "INFO: output-file is set to '$OUTPUT_FILE'"
+              # Verify it's a valid /tmp path
+              case "$OUTPUT_FILE" in
+                /tmp/docker-agent-*)
+                  echo "PASS: output-file has expected /tmp/docker-agent-* pattern"
+                  ;;
+                *)
+                  echo "FAIL: output-file '$OUTPUT_FILE' does not match expected pattern"
+                  exit 1
+                  ;;
+              esac
+            else
+              echo "INFO: output-file not set (action may have failed before binary setup)"
+            fi
+            if [ -n "$VERBOSE_LOG_FILE" ]; then
+              echo "INFO: verbose-log-file is set to '$VERBOSE_LOG_FILE'"
+            fi
+            echo "PASS: output file path assertions complete"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

@@ -10,33 +10,52 @@
 
 **Harden Agent Version:** `2`
 
-Action **docker--cagent-action/v1.5.4** was hardened automatically. 2 finding(s) were identified and resolved across 4 iteration(s).
+Action **docker--cagent-action/v1.5.4** was hardened automatically. 4 finding(s) were identified and resolved across 4 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Rule (a): Direct ${{ }} expression interpolation inside run: shell scripts. In the 'Resolve PR number and comment ID' step, ${{ github.event.pull_request.number }}, ${{ github.event.issue.number }}, and ${{ github.event.comment.id }} are interpolated directly into the shell script body (not via env: block). An attacker who can control PR/issue/comment metadata could inject shell metacharacters. In the 'Evaluate review lock' step, ${{ steps.review-lock.outputs.cache-matched-key }} is interpolated directly into an if-condition in the shell script.
+Sub-rule (a): The 'Resolve PR number and comment ID' run: block in review-pr/action.yml directly interpolates ${{ github.event.pull_request.number }}, ${{ github.event.issue.number }}, and ${{ github.event.comment.id }} inside shell commands. These github context values are attacker-controlled (e.g. via a crafted PR title or comment) and are substituted into the shell script before execution, enabling command injection. Offending lines:
+  PR_NUMBER="${{ github.event.pull_request.number }}"
+  PR_NUMBER="${{ github.event.issue.number }}"
+  COMMENT_ID="${{ github.event.comment.id }}"
 
 Locations:
 
 - `review-pr/action.yml:95`
 - `review-pr/action.yml:98`
 - `review-pr/action.yml:110`
-- `review-pr/action.yml:160`
 
-### github-env-injection (severity: high)
+### script-injection (severity: high)
 
-Multiple run: blocks write values derived from untrusted inputs to $GITHUB_OUTPUT without the required sanitization step (printf '%s' ... | tr -d '\n\r'). (1) 'Resolve PR number and comment ID' step: PR_NUMBER (sourced from ${{ github.event.pull_request.number }} or ${{ github.event.issue.number }}) and COMMENT_ID (sourced from ${{ github.event.comment.id }}) are written directly to $GITHUB_OUTPUT via echo without newline stripping. (2) 'Resolve GitHub token' step: $EXPLICIT_TOKEN (from inputs.github-token, a caller-controlled input) is written to $GITHUB_OUTPUT without sanitization. (3) 'Build review context' step: review_context.md — which contains $EXTRA_PROMPT from inputs.additional-prompt — is written to $GITHUB_OUTPUT via a heredoc with delimiter PROMPT_EOF; if the input contains a line consisting solely of 'PROMPT_EOF', the heredoc terminates early and arbitrary key=value pairs can be injected. (4) 'Collect pending feedback' step: $COMBINED (assembled from downloaded artifact data, which is externally controlled) is written to $GITHUB_OUTPUT via a heredoc with delimiter FEEDBACK_EOF, subject to the same heredoc-injection risk.
+Sub-rule (a): The 'Evaluate review lock' run: block in review-pr/action.yml directly interpolates ${{ steps.review-lock.outputs.cache-matched-key }} inside a shell test expression. Step outputs are workflow-controllable and flow through YAML template substitution before the shell sees them, enabling command injection. Offending line:
+  if [ -n "${{ steps.review-lock.outputs.cache-matched-key }}" ]; then
 
 Locations:
 
-- `review-pr/action.yml:104`
-- `review-pr/action.yml:112`
-- `review-pr/action.yml:129`
-- `review-pr/action.yml:132`
-- `review-pr/action.yml:29039`
-- `review-pr/action.yml:24420`
+- `review-pr/action.yml:161`
+
+### github-env-injection (severity: high)
+
+The 'Resolve GitHub token' run: block writes $EXPLICIT_TOKEN (sourced from inputs.github-token via env:) and $DEFAULT_TOKEN (sourced from github.token via env:) to $GITHUB_OUTPUT without the required sanitization step (printf '%s' ... | tr -d '\n\r'). An attacker-controlled github-token input containing newlines could inject arbitrary key=value pairs into the output file.
+  echo "token=$EXPLICIT_TOKEN" >> $GITHUB_OUTPUT
+  echo "token=$DEFAULT_TOKEN" >> $GITHUB_OUTPUT
+
+Locations:
+
+- `review-pr/action.yml:130`
+- `review-pr/action.yml:133`
+
+### github-env-injection (severity: high)
+
+The 'Build review context' run: block writes $EXTRA_PROMPT (sourced from inputs.additional-prompt via env:) into review_context.md and then pipes the entire file into $GITHUB_OUTPUT via a heredoc. An attacker-controlled additional-prompt input containing newlines (e.g. 'PROMPT_EOF\nmalicious=value') could inject arbitrary key=value pairs or escape the heredoc delimiter, corrupting the output file.
+  echo "$EXTRA_PROMPT" >> review_context.md
+  { echo "review_prompt<<PROMPT_EOF"; cat review_context.md; echo "PROMPT_EOF"; } >> $GITHUB_OUTPUT
+
+Locations:
+
+- `review-pr/action.yml:490`
 
 ## Iteration Notes
 
@@ -46,40 +65,38 @@ Locations:
 
 **Notes:**
 
-Fixed all script-injection and github-env-injection findings in hardened/action/review-pr/action.yml:
+Fixed all four security findings in hardened/action/review-pr/action.yml:
 
-1. **script-injection (lines 95, 98, 110, 160)**: Moved ${{ github.event.pull_request.number }}, ${{ github.event.issue.number }}, ${{ github.event.comment.id }} into the env: block of the 'Resolve PR number and comment ID' step as EVENT_PR_NUMBER, EVENT_ISSUE_NUMBER, EVENT_COMMENT_ID. Moved ${{ steps.review-lock.outputs.cache-matched-key }} into the env: block of the 'Evaluate review lock' step as CACHE_MATCHED_KEY.
+1. Script injection (Resolve PR number and comment ID step): Moved github.event.pull_request.number, github.event.issue.number, and github.event.comment.id from inline ${{ }} interpolation in shell into the step's env: block as EVENT_PR_NUMBER, EVENT_ISSUE_NUMBER, and EVENT_COMMENT_ID.
 
-2. **github-env-injection (lines 104, 112, 129, 132, ~24420, ~29039)**: Added `printf '%s' "$VAR" | tr -d '\n\r'` sanitization before writing pr-number, comment-id, and token values to $GITHUB_OUTPUT. Replaced fixed heredoc delimiters PROMPT_EOF and FEEDBACK_EOF with randomly generated delimiters using `openssl rand -hex 16` to prevent heredoc injection attacks where attacker-controlled content could contain the delimiter string and inject arbitrary key=value pairs into $GITHUB_OUTPUT.
+2. Script injection (Evaluate review lock step): Moved steps.review-lock.outputs.cache-matched-key from inline ${{ }} interpolation in shell test expression into the step's env: block as CACHE_MATCHED_KEY.
+
+3. GitHub env injection (Resolve GitHub token step): Added sanitization with `printf '%s' "$TOKEN" | tr -d '\n\r'` before writing token values to $GITHUB_OUTPUT to prevent newline injection.
+
+4. GitHub env injection (Build review context step): Replaced the static heredoc delimiter PROMPT_EOF with a randomly generated delimiter using `openssl rand -hex 16` to prevent attacker-controlled additional-prompt content from escaping the heredoc and injecting arbitrary key=value pairs into $GITHUB_OUTPUT.
 
 ### Iteration 2
 
-**Fixes applied:** script-injection
+**Fixes applied:** github-env-injection
 
 **Notes:**
 
-Fixed script injection in 5 workflow files by moving all ${{ }} expressions out of run: shell scripts into step env: blocks:
-
-1. self-review-pr-trigger.yml: Moved github.event_name to EVENT_NAME env var.
-
-2. update-docker-agent-version.yml: Moved github.event_name, github.server_url, github.repository, github.run_id to GH_EVENT_NAME, GH_SERVER_URL, GH_REPOSITORY, GH_RUN_ID env vars in the 'Create or update PR' step.
-
-3. release.yml: Moved github.server_url, github.repository, github.run_id to GH_SERVER_URL, GH_REPOSITORY, GH_RUN_ID env vars in the update-self-refs 'Create or update PR' step.
-
-4. test-e2e.yml: Fixed 8 steps across 4 jobs - moved github.event.pull_request.head.repo.full_name, github.event_name, github.repository, steps outputs, github.actor to env vars.
-
-5. test-e2e-reviewer.yml: Fixed 7 steps across 2 jobs - moved github.event.pull_request.head.repo.full_name, github.event_name, github.repository, github.actor, inputs.pr_number, steps outputs to env vars.
+Fixed the 'Resolve PR number and comment ID' step in review-pr/action.yml by adding sanitization before writing to $GITHUB_OUTPUT:
+1. Added `safe_pr_number=$(printf '%s' "$PR_NUMBER" | tr -d '\n\r')` and changed the echo to use `$safe_pr_number` instead of `$PR_NUMBER`.
+2. Added `safe_comment_id=$(printf '%s' "$COMMENT_ID" | tr -d '\n\r')` and changed the echo to use `$safe_comment_id` instead of `$COMMENT_ID`.
+This matches the sanitization pattern already used in the 'Resolve GitHub token' step in the same file.
 
 ### Iteration 3
 
-**Fixes applied:** script-injection, github-env-injection
+**Fixes applied:** github-env-injection, github-env-injection
 
 **Notes:**
 
-Fixed 3 findings across 3 files:
-1. test-e2e.yml (script-injection): Quoted all 6 unquoted $TEST_PR_NUMBER expansions in gh api URL paths across test-mention-reply-toplevel and test-mention-reply-inline jobs. Changed `gh api repos/.../issues/$TEST_PR_NUMBER/...` to `gh api "repos/.../issues/$TEST_PR_NUMBER/..."` to prevent shell word-splitting on attacker-controlled input.
-2. release.yml (github-env-injection): Replaced fixed 'EOF' heredoc delimiter with a randomized one (`DELIM="NOTES_EOF_$(openssl rand -hex 16)"`) when writing release notes to $GITHUB_OUTPUT in the 'Fetch release notes from GitHub' step of the notify job.
-3. update-docker-agent-version.yml (github-env-injection): Added sanitization of VERSION before writing to $GITHUB_OUTPUT: `safe_version=$(printf '%s' "$VERSION" | tr -d '\n\r')` followed by `echo "version=$safe_version" >> "$GITHUB_OUTPUT"`, preventing newline injection from user-controlled workflow_dispatch or repository_dispatch inputs.
+Fixed two github-env-injection findings in hardened/action/review-pr/action.yml:
+
+1. 'Build review context' step (line ~762): Added `SAFE_EXTRA_PROMPT=$(printf '%s' "$EXTRA_PROMPT" | tr -d '\n\r')` before appending the additional-prompt input to review_context.md. The sanitized variable replaces the raw `$EXTRA_PROMPT` in the heredoc, ensuring newlines are stripped from the untrusted input before it reaches $GITHUB_OUTPUT.
+
+2. 'Post clean summary' step (line ~855): Added sanitization for `$REPOSITORY` (github.repository) and `$PR_NUMBER` using `printf '%s' ... | tr -d '\n\r'`, constructed REVIEW_URL from the sanitized values, then applied a final sanitization pass before writing `review-url=$safe_review_url` to $GITHUB_OUTPUT.
 
 ### Iteration 4
 
@@ -87,8 +104,5 @@ Fixed 3 findings across 3 files:
 
 **Notes:**
 
-Fixed all three github-env-injection findings:
-1. review-pr/action.yml 'Post clean summary' step: Sanitized REPOSITORY via `SAFE_REPOSITORY=$(printf '%s' "$REPOSITORY" | tr -d '\n\r')` before building REVIEW_URL, and sanitized the final URL before writing to $GITHUB_OUTPUT.
-2. .github/workflows/review-pr.yml 'Parse comment context' step: Sanitized EVENT_PR_NUMBER and EVENT_PR_HEAD_SHA with `printf '%s' ... | tr -d '\n\r'` before writing pr-number and pr-head-sha to $GITHUB_OUTPUT.
-3. .github/workflows/review-pr.yml 'Build thread context' step: Sanitized REPO with `SAFE_REPO=$(printf '%s' "$REPO" | tr -d '\n\r')` at the start of the run block, and replaced all uses of $REPO with $SAFE_REPO throughout the step including the heredoc block written to $GITHUB_OUTPUT.
+Fixed heredoc injection vulnerability in the 'Collect pending feedback' step of review-pr/action.yml. The fixed delimiter 'FEEDBACK_EOF' was replaced with a randomly generated UUID-based delimiter 'FEEDBACK_$(uuidgen | tr -d "-")'. Since the delimiter is generated at runtime using a cryptographically random UUID, an attacker who controls artifact content (FB_PATH, FB_LINE, FB_BODY from feedback.json) cannot predict the delimiter and therefore cannot craft a line that matches it to escape the heredoc and inject arbitrary key=value pairs into $GITHUB_OUTPUT.
 

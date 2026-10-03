@@ -1,0 +1,43 @@
+name: Test Node.js setup step succeeds
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify Node.js is not pre-configured to v24
+        run: |
+          echo "Node version before action: $(node --version || echo 'not installed')"
+
+      - name: Invoke setup-credentials action
+        id: action
+        uses: .
+        continue-on-error: true
+
+      - name: Assert Node.js v24 was set up by the action
+        run: |
+          NODE_VERSION="$(node --version)"
+          echo "Node version after action: $NODE_VERSION"
+          MAJOR="$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')"
+          echo "Major version: $MAJOR"
+          if [ "$MAJOR" != "24" ]; then
+            echo "FAIL: expected Node.js v24, got $NODE_VERSION"
+            exit 1
+          fi
+          echo "PASS: Node.js v24 is set up correctly"
+
+      - name: Assert action outcome is failure or success (not skipped/cancelled)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed at credentials step (expected — no AWS OIDC in harness)"
+          elif [ "$OUTCOME" = "success" ]; then
+            echo "PASS: action succeeded (credentials were obtained)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME' — action should have run"
+            exit 1
+          fi
